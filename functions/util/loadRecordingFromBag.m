@@ -1,6 +1,4 @@
 function traj = loadRecordingFromBag(bagFolder, topicName)
-%ros2genmsg('../src/unisa_acg_ros2/haptics/haptic_experiments_msgs') % to put in main
-    % read topicname from metadata.yaml file
 
     bagReader = ros2bagreader(bagFolder);
     bagSel = select(bagReader, "Topic", topicName);
