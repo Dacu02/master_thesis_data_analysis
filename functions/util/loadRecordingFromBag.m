@@ -26,5 +26,4 @@ function traj = loadRecordingFromBag(bagFolder, topicName)
     traj.v = sqrt(sum(linVel.^2, 2));
     traj.t = t;
     traj.f = 1 / median(diff(t));   % stimata dai timestamp reali, non fissa
-    traj.m = struct('SourceFile', bagFolder, 'Topic', topicName);
 end

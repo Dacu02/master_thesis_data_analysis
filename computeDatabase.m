@@ -3,7 +3,7 @@ addpath src/master_thesis_data_analysis/functions/idelog
 addpath src/master_thesis_data_analysis/functions/util
 
 DATABASE_TYPE = getDatabaseType();
-OUTPUT_DATA_FOLDER = "lognormal_database;"
+OUTPUT_DATA_FOLDER = "lognormal_database";
 if DATABASE_TYPE ~= "PATH" && DATABASE_TYPE ~= "FORCE"
     error('Database type must be "PATH" or "FORCE" for this script.');
 end
@@ -38,21 +38,24 @@ topic_name = topic_name_match{1};
 RESAMPLING_FREQUENCY = 500;
 BUTTERWORTH_CUTOFF = 14;
 BUTTERWORTH_ORDER = 4;
-
+SMOOTHING = 0;
 % process each .db3 file
 for fileIndex = 1:numel(db3Files)
     % input
     db3FilePath = fullfile(db3Files(fileIndex).folder, db3Files(fileIndex).name);
     trajectory = loadRecordingFromBag(db3FilePath, topic_name);
 
+        
+
     % pipeline
     resampled_trajectory = resample(trajectory, RESAMPLING_FREQUENCY);
-    processed_trajectory = butterworth(resampled_trajectory, BUTTERWORTH_ORDER, BUTTERWORTH_CUTOFF);
-    processed_trajectory = integrate(processed_trajectory);
+    filtered_trajectory = chebyshevIdelog(resampled_trajectory, false);
+    processed_trajectory = integrate(filtered_trajectory);
+
 
     % idelog
     try
-        [reconstructed_trajectory, strokes, ~, ~, velocityApproached] = idelog(processed_trajectory, struct('SamplingFrequency', processed_trajectory.f, 'ScriptStudio_smoothing', 0));
+        [reconstructed_trajectory, strokes, ~, ~, velocityApproached] = idelog(processed_trajectory, struct('SamplingFrequency', processed_trajectory.f, 'ScriptStudio_smoothing', SMOOTHING));
     catch ME       
         warning('Idelog failed for file %s: %s', db3FilePath, ME.message);
         continue;
@@ -101,7 +104,7 @@ end
     [export_dir, export_name] = fileparts(export_path);
 
     lognormal_strokes_file = fullfile(export_dir, export_name + "_logn.csv");
-    reconstructed_trajectory_file = fullfile(export_dir, export_name + "_.csv");
+    reconstructed_trajectory_file = fullfile(export_dir, export_name + ".csv");
     
     mkdir(fileparts(lognormal_strokes_file));
     mkdir(fileparts(reconstructed_trajectory_file));

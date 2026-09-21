@@ -1,6 +1,8 @@
-function trajOut = chebyshev(trajIn, order, cutoffHz, rippleDb)
+function trajOut = chebyshev(trajIn, order, cutoffHz, rippleDb, position)
     if nargin < 4
         rippleDb = 0.5;
+    elseif nargin < 5
+        position = false;
     end
     nyq = trajIn.f / 2;
     if ~(0 < cutoffHz && cutoffHz < nyq)
@@ -8,5 +10,9 @@ function trajOut = chebyshev(trajIn, order, cutoffHz, rippleDb)
     end
     [b, a] = cheby1(order, rippleDb, cutoffHz / nyq, 'low');
     trajOut = trajIn;
-    trajOut.v = filtfilt(b, a, trajIn.v);
+    if position
+        trajOut.p = filtfilt(b, a, trajIn.p);
+    else
+        trajOut.v = filtfilt(b, a, trajIn.v);
+    end
 end
