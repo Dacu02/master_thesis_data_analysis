@@ -1,7 +1,5 @@
 function D = arcLength3Points(P1, P2, P3)
-%ARCLENGTH3POINTS Lunghezza dell'arco di circonferenza per tre punti 3D
-%   (o della spezzata P1-P2-P3 se quasi allineati). Helper privato di
-%   traj.idelog.
+%ARCLENGTH3POINTS Measure arc length of a circular arc defined by three points in 3D space.
     a = norm(P2 - P3); b = norm(P1 - P3); c = norm(P1 - P2);
     Area = 0.5 * norm(cross(P2 - P1, P3 - P1));
     tol = 1e-9 * max([a b c])^2;

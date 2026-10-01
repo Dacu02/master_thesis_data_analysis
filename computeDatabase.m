@@ -36,38 +36,49 @@ end
 topic_name = topic_name_match{1};
 
 RESAMPLING_FREQUENCY = 500;
-BUTTERWORTH_CUTOFF = 14;
-BUTTERWORTH_ORDER = 4;
 SMOOTHING = 0;
+if DATABASE_TYPE == "PATH"
+    IDELOG_PARAMETERS = struct( ...
+        'SamplingFrequency', RESAMPLING_FREQUENCY, ...
+        'ScriptStudio_smoothing', SMOOTHING, ...
+        'timeBetween', 0.875 ...
+    );
+else % DATABASE_TYPE == "FORCE"
+    IDELOG_PARAMETERS = struct( ...
+        'SamplingFrequency', RESAMPLING_FREQUENCY, ...
+        'ScriptStudio_smoothing', SMOOTHING ...
+    );
+end
+
 % process each .db3 file
 for fileIndex = 1:numel(db3Files)
     % input
     db3FilePath = fullfile(db3Files(fileIndex).folder, db3Files(fileIndex).name);
     trajectory = loadRecordingFromBag(db3FilePath, topic_name);
 
-        
-
     % pipeline
-    resampled_trajectory = resample(trajectory, RESAMPLING_FREQUENCY);
-    filtered_trajectory = chebyshevIdelog(resampled_trajectory, false);
-    processed_trajectory = integrate(filtered_trajectory);
+    resampledTrajectory = resample(trajectory, RESAMPLING_FREQUENCY);
+    trimmedTrajectory = filterBoundaryStrokes(resampledTrajectory);
+    paddedTrajectory = padTrimmed(trimmedTrajectory, resampledTrajectory);
+    filteredTrajectory = chebyshevIdelog(paddedTrajectory, true);
 
 
     % idelog
     try
-        [reconstructed_trajectory, strokes, ~, ~, velocityApproached] = idelog(processed_trajectory, struct('SamplingFrequency', processed_trajectory.f, 'ScriptStudio_smoothing', SMOOTHING));
-    catch ME       
+        [reconstructedTrajectory, strokes, ~, ~, velocityApproached] = idelog(filteredTrajectory, struct('SamplingFrequency', filteredTrajectory.f, 'ScriptStudio_smoothing', SMOOTHING));
+    catch ME
         warning('Idelog failed for file %s: %s', db3FilePath, ME.message);
         continue;
     end
 
-    
-    % interpolate the reference data
-    reference.p = interp1(trajectory.t, trajectory.p, reconstructed_trajectory.t, 'pchip', 'extrap');
-    reference.v = interp1(trajectory.t, trajectory.v, reconstructed_trajectory.t, 'pchip', 'extrap');
-    reference.t = reconstructed_trajectory.t;
 
-    metrics = compareTrajectories(reference, reconstructed_trajectory);%, "Comparison for file: " + db3Files(fileIndex).name);
+    % interpolate the reference data
+    reference.p = interp1(trajectory.t, trajectory.p, reconstructedTrajectory.t, 'pchip', 'extrap');
+    reference.v = interp1(trajectory.t, trajectory.v, reconstructedTrajectory.t, 'pchip', 'extrap');
+    reference.t = reconstructedTrajectory.t;
+    reference.f = reconstructedTrajectory.f;
+
+    metrics = compareTrajectories(reference, reconstructedTrajectory);%, "Comparison for file: " + db3Files(fileIndex).name);
     % print metrics
     fprintf('File: %s\n', db3FilePath);
     fprintf('SNR T: %f\n', metrics.SNR_T);
@@ -80,13 +91,13 @@ for fileIndex = 1:numel(db3Files)
     export_path_last_folder = export_path_folders{end};
 
     n = numel(strokes);
-if n > 0
-    startPts = vertcat(strokes.StartPoint);   % Nx3
-    midPts   = vertcat(strokes.MidPoint);     % Nx3
-    endPts   = vertcat(strokes.EndPoint);     % Nx3
-else
-    startPts = zeros(0,3); midPts = zeros(0,3); endPts = zeros(0,3);
-end
+    if n > 0
+        startPts = vertcat(strokes.StartPoint);   % Nx3
+        midPts   = vertcat(strokes.MidPoint);     % Nx3
+        endPts   = vertcat(strokes.EndPoint);     % Nx3
+    else
+        startPts = zeros(0,3); midPts = zeros(0,3); endPts = zeros(0,3);
+    end
 
     lognorm_table = table([strokes.Id]', [strokes.D]', [strokes.Mu]', [strokes.Sigma]', [strokes.To]', ...
         startPts(:,1), startPts(:,2), startPts(:,3), ...
@@ -95,21 +106,21 @@ end
         repmat(metrics.SNR_T, n, 1), repmat(metrics.SNR_V, n, 1), ...
         'VariableNames', {'stroke','D','mu','sigma','to','start_x','start_y','start_z','mid_x','mid_y','mid_z','end_x','end_y','end_z','snr_t','snr_v'});
 
-    trajectory_table = table(reconstructed_trajectory.t, ...
-    reconstructed_trajectory.p(:,1), reconstructed_trajectory.p(:,2), reconstructed_trajectory.p(:,3), ...
-    reconstructed_trajectory.v, ...
-    reference.p(:,1), reference.p(:,2), reference.p(:,3), reference.v, ...
-    'VariableNames', {'time','rec_x','rec_y','rec_z','rec_v','ref_x','ref_y','ref_z','ref_v'});
+    trajectory_table = table(reconstructedTrajectory.t, ...
+        reconstructedTrajectory.p(:,1), reconstructedTrajectory.p(:,2), reconstructedTrajectory.p(:,3), ...
+        reconstructedTrajectory.v, ...
+        reference.p(:,1), reference.p(:,2), reference.p(:,3), reference.v, ...
+        'VariableNames', {'time','rec_x','rec_y','rec_z','rec_v','ref_x','ref_y','ref_z','ref_v'});
 
     [export_dir, export_name] = fileparts(export_path);
 
     lognormal_strokes_file = fullfile(export_dir, export_name + "_logn.csv");
-    reconstructed_trajectory_file = fullfile(export_dir, export_name + ".csv");
-    
+    reconstructedTrajectory_file = fullfile(export_dir, export_name + ".csv");
+
     mkdir(fileparts(lognormal_strokes_file));
-    mkdir(fileparts(reconstructed_trajectory_file));
+    mkdir(fileparts(reconstructedTrajectory_file));
 
     writetable(lognorm_table, lognormal_strokes_file);
-    writetable(trajectory_table, reconstructed_trajectory_file);
+    writetable(trajectory_table, reconstructedTrajectory_file);
 
 end

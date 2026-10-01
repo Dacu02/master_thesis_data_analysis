@@ -1,13 +1,13 @@
 function config = idelogConfig()
     % Parameters of idelog
     config.SpatialResolution = 0.0254;
-    config.SamplingFrequency = [];   % [] = usa trajIn.Fs
+    config.SamplingFrequency = 500;
 
     setUp = struct;
     setUp.Type_of_link_between_target_points = 1; % arc of circumference
     setUp.Type_of_Bell_Shaped_Function = 2; % lognormal
     setUp.Type_of_Reconstruction = 1; % speed + path for reconstruction
-    setUp.Time_between_to_and_t1 = 0.5;
+    setUp.Time_between_to_and_t1 = 0.875;
     setUp.SNRs_work_out_by_segments = 1;
     setUp.number_of_control_points = 3;
     if setUp.Type_of_link_between_target_points == 2
@@ -21,7 +21,7 @@ function config = idelogConfig()
     % campionamento viene aumentata (se change_to_optimal_resolution=1).
     % /DEFAULT 0.04/
     setUp.time_between_velocity_minima = 0.04;
-    setUp.ScriptStudio_smoothing = 1;
+    setUp.ScriptStudio_smoothing = 0;
     setUp.method_to_work_out_velocity_minima = 0; % when 0 uses velocity minima, otherwise angle change
     setUp.DRAW = 0;
 

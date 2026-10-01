@@ -7,7 +7,7 @@ function plotTrajectoriesN(trajs, labels, tabLabel)
 
     nSig = numel(trajs);
     if numel(labels) ~= nSig
-        error('plotTrajectoriesN:labels', 'labels deve avere %d elementi quanto trajs.', nSig);
+        error('plotTrajectoriesN:labels', 'labels must have %d elements, same as trajs.', nSig);
     end
 
     tabgroup = comparisonTabGroup();
@@ -29,7 +29,7 @@ function plotTrajectoriesN(trajs, labels, tabLabel)
     axis(ax1, 'equal'); view(ax1, 3); grid(ax1, 'on');
     xlabel(ax1, 'X'); ylabel(ax1, 'Y'); zlabel(ax1, 'Z');
     legend(ax1, 'Location', 'best');
-    title(ax1, 'Traiettoria');
+    title(ax1, 'Trajectory');
 
     ax2 = nexttile(tl);
     hold(ax2, 'on');
@@ -43,7 +43,7 @@ function plotTrajectoriesN(trajs, labels, tabLabel)
     hold(ax2, 'off');
     grid(ax2, 'on');
     legend(ax2, 'Location', 'best', 'NumColumns', nSig);
-    xlabel(ax2, 'Tempo (s)'); ylabel(ax2, 'Posizione');
+    xlabel(ax2, 'Time (s)'); ylabel(ax2, 'Position');
 
     ax3 = nexttile(tl);
     hold(ax3, 'on');
@@ -53,7 +53,7 @@ function plotTrajectoriesN(trajs, labels, tabLabel)
     hold(ax3, 'off');
     grid(ax3, 'on');
     legend(ax3, 'Location', 'best');
-    xlabel(ax3, 'Tempo (s)'); ylabel(ax3, 'Velocità');
+    xlabel(ax3, 'Time (s)'); ylabel(ax3, 'Speed');
 
     linkaxes([ax2 ax3], 'x');
 

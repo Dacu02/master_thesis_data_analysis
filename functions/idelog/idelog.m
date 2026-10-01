@@ -1,4 +1,4 @@
-function [trajOut, strokes, snrT, snrV, velocityApproached] = idelog(trajIn, configOverride)
+function [trajOut, strokes, snrT, snrV, velocityApproached, idelogObjectResult] = idelog(trajIn, configOverride)
 %   Trajectory reconstruction using Sigma-Lognormal 3D (iDeLog3D).
 %   [trajOut, strokes, snrT, snrV, velocityApproached] = IDELOG(trajIn)
 %   uses default parameters (idelogDefaultConfig).
@@ -41,7 +41,7 @@ function [trajOut, strokes, snrT, snrV, velocityApproached] = idelog(trajIn, con
     newFigs = setdiff(findall(groot, 'Type', 'figure'), figsBefore);
     close(newFigs);
     set(0, 'DefaultFigureVisible', 'on');
-
+    idelogObjectResult = RecoiDeLog3D;
     zr = RecoiDeLog3D.z_reconstructed;
     vrReconstructed = RecoiDeLog3D.velocity_reconstruted;   % nome del toolbox, refuso incluso
 
@@ -50,7 +50,7 @@ function [trajOut, strokes, snrT, snrV, velocityApproached] = idelog(trajIn, con
         vrReconstructed = [NaN; vrReconstructed(:)];
     elseif numel(vrReconstructed) ~= n
         error('idelog:velocityLength', ...
-            'velocity_reconstruted ha %d campioni, attesi %d o %d.', ...
+            'velocity_reconstruted has %d samples, expected %d or %d.', ...
             numel(vrReconstructed), n, n - 1);
     end
 
@@ -58,7 +58,7 @@ function [trajOut, strokes, snrT, snrV, velocityApproached] = idelog(trajIn, con
     fActual = (n - 1) / ttotalfirma;
     trajOut.p = [xr(:), yr(:), zr(:)];
     trajOut.v = vrReconstructed(:) * fActual;
-    trajOut.t = (0:n-1)' / fActual;
+    trajOut.t = (0:n-1)' / fActual + trajIn.t(1);
     trajOut.f = fActual;
 
     strokes = extractStrokes(ParamiDeLog3D, RecoiDeLog3D, ttotalfirma);
@@ -95,7 +95,7 @@ function strokes = extractStrokes(ParamiDeLog3D, RecoiDeLog3D, ttotalfirma) %#ok
     tokens = regexp(consoleText, pattern, 'tokens');
     if numel(tokens) ~= nStrokes
         error('idelog:strokeMismatch', ...
-            'Found %d strokek in console text, expected %d.', numel(tokens), nStrokes);
+            'Found %d strokes in console text, expected %d.', numel(tokens), nStrokes);
     end
 
     strokes = repmat(struct('Id', 0, 'Mu', 0, 'Sigma', 0, 'To', 0, 'D', 0, ...
@@ -117,13 +117,26 @@ function strokes = extractStrokes(ParamiDeLog3D, RecoiDeLog3D, ttotalfirma) %#ok
             RecoiDeLog3D.iDeLog_start_angles(strokeId), ...
             RecoiDeLog3D.iDeLog_end_angles(strokeId));
 
+        
         strokes(strokeId).Id = strokeId;
+        % params
+        strokes(strokeId).MidPoint = [midX, midY, midZ];
+        strokes(strokeId).D = arcLength3Points(startPoint, strokes(strokeId).MidPoint, endPoint);
         strokes(strokeId).Mu = ParamiDeLog3D.iDeLog_parameters_bell_functions{1}(strokeId, 2);
         strokes(strokeId).Sigma = ParamiDeLog3D.iDeLog_parameters_bell_functions{1}(strokeId, 3);
         strokes(strokeId).To = parsed(5);
+        
+        % space
         strokes(strokeId).StartPoint = startPoint;
-        strokes(strokeId).MidPoint = [midX, midY, midZ];
         strokes(strokeId).EndPoint = endPoint;
-        strokes(strokeId).D = arcLength3Points(startPoint, strokes(strokeId).MidPoint, endPoint);
+        strokes(strokeId).UVector = RecoiDeLog3D.iDeLog_u_plane_vectors;
+        strokes(strokeId).Vvector = RecoiDeLog3D.iDeLog_v_plane_vectors;
+        strokes(strokeId).StartAngle = RecoiDeLog3D.iDeLog_start_angles;
+        strokes(strokeId).EndAngle = RecoiDeLog3D.iDeLog_end_angles;
+
+        % space (idelog)
+        strokes(strokeId).iDeLog_target_and_intermediate_x_points = RecoiDeLog3D.iDeLog_target_and_intermediate_x_points;
+        strokes(strokeId).iDeLog_target_and_intermediate_y_points = RecoiDeLog3D.iDeLog_target_and_intermediate_y_points;
+        strokes(strokeId).iDeLog_target_and_intermediate_z_points = RecoiDeLog3D.iDeLog_target_and_intermediate_z_points;
     end
 end

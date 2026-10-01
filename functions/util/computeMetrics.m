@@ -8,12 +8,12 @@ function metrics = computeMetrics(reference, test, label, t)
 
     if ~isequal(size(reference), size(test))
         error('computeMetrics:size', ...
-            'reference e test devono avere la stessa dimensione (%s vs %s).', ...
+            'reference and test must have the same size (%s vs %s).', ...
             mat2str(size(reference)), mat2str(size(test)));
     end
     if ~isempty(t) && numel(t) ~= size(reference, 1)
         error('computeMetrics:time', ...
-            't ha %d elementi, attesi %d (come reference/test).', numel(t), size(reference, 1));
+            't has %d elements, expected %d (as reference/test).', numel(t), size(reference, 1));
     end
 
     err = reference - test;
@@ -23,7 +23,7 @@ function metrics = computeMetrics(reference, test, label, t)
     nInvalid = nnz(~validRows);
     if nInvalid > 0
         warning('computeMetrics:nan', ...
-            '%d/%d campioni con NaN esclusi dal calcolo di SNR/MSE (restano visibili nel plot come gap).', ...
+            '%d/%d NaN samples excluded from SNR/MSE computation.', ...
             nInvalid, numel(validRows));
     end
 
