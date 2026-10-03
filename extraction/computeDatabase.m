@@ -1,7 +1,6 @@
-addpath src/master_thesis_data_analysis/functions
-addpath src/master_thesis_data_analysis/functions/idelog
-addpath src/master_thesis_data_analysis/functions/util
-
+addpath src/master_thesis_data_analysis/extraction/functions/idelog
+addpath src/master_thesis_data_analysis/extraction/functions/
+addpath src/master_thesis_data_analysis/extraction/functions/util/
 DATABASE_TYPE = getDatabaseType();
 OUTPUT_DATA_FOLDER = "lognormal_database";
 if DATABASE_TYPE ~= "PATH" && DATABASE_TYPE ~= "FORCE"
@@ -50,6 +49,8 @@ else % DATABASE_TYPE == "FORCE"
     );
 end
 
+DEBUG = 0;
+
 % process each .db3 file
 for fileIndex = 1:numel(db3Files)
     % input
@@ -62,7 +63,6 @@ for fileIndex = 1:numel(db3Files)
     paddedTrajectory = padTrimmed(trimmedTrajectory, resampledTrajectory);
     filteredTrajectory = chebyshevIdelog(paddedTrajectory, true);
 
-
     % idelog
     try
         [reconstructedTrajectory, strokes, ~, ~, velocityApproached] = idelog(filteredTrajectory, struct('SamplingFrequency', filteredTrajectory.f, 'ScriptStudio_smoothing', SMOOTHING));
@@ -70,8 +70,17 @@ for fileIndex = 1:numel(db3Files)
         warning('Idelog failed for file %s: %s', db3FilePath, ME.message);
         continue;
     end
-
-
+    
+    if DEBUG > 0 && mod(fileIndex, DEBUG) == 0
+        plotTrajectoriesN(trajectory, "r_t", "r_t")
+        plotTrajectoriesN(resampledTrajectory, "r_{t_k}", "r_{t_k}");
+        plotTrajectoriesN(trimmedTrajectory, "t_{t_k}", "t_{t_k}")
+        plotTrajectoriesN(paddedTrajectory, "p_{t_k}", "p_{t_k}")
+        plotTrajectoriesN(filteredTrajectory, "f_{t_k}", "f_{t_k}")
+        plotTrajectoriesN(reconstructedTrajectory, "s_{t_k}", "s_{t_k}")
+        waitforbuttonpress();
+    end
+    
     % interpolate the reference data
     reference.p = interp1(trajectory.t, trajectory.p, reconstructedTrajectory.t, 'pchip', 'extrap');
     reference.v = interp1(trajectory.t, trajectory.v, reconstructedTrajectory.t, 'pchip', 'extrap');
