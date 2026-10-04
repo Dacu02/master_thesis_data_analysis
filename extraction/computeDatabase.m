@@ -59,7 +59,9 @@ for fileIndex = 1:numel(db3Files)
 
     % pipeline
     resampledTrajectory = resample(trajectory, RESAMPLING_FREQUENCY);
-    trimmedTrajectory = filterBoundaryStrokes(resampledTrajectory);
+    trimmedTrajectory = cutBoundaryStrokes(resampledTrajectory);
+    roundedTrajectory = rampBoundaryEdges(trimmedTrajectory);
+    % skip rounding
     paddedTrajectory = padTrimmed(trimmedTrajectory, resampledTrajectory);
     filteredTrajectory = chebyshevIdelog(paddedTrajectory, true);
 
@@ -75,6 +77,7 @@ for fileIndex = 1:numel(db3Files)
         plotTrajectoriesN(trajectory, "r_t", "r_t")
         plotTrajectoriesN(resampledTrajectory, "r_{t_k}", "r_{t_k}");
         plotTrajectoriesN(trimmedTrajectory, "t_{t_k}", "t_{t_k}")
+        plotTrajectoriesN(roundedTrajectory, "d_{t_k}", "d_{t_k}")
         plotTrajectoriesN(paddedTrajectory, "p_{t_k}", "p_{t_k}")
         plotTrajectoriesN(filteredTrajectory, "f_{t_k}", "f_{t_k}")
         plotTrajectoriesN(reconstructedTrajectory, "s_{t_k}", "s_{t_k}")
@@ -97,23 +100,13 @@ for fileIndex = 1:numel(db3Files)
     % output
     export_path = fullfile(pwd, OUTPUT_DATA_FOLDER, exportPath(db3FilePath, DATABASE_TYPE));
     export_path_folders = strsplit(export_path, filesep);
-    export_path_last_folder = export_path_folders{end};
-
     n = numel(strokes);
-    if n > 0
-        startPts = vertcat(strokes.StartPoint);   % Nx3
-        midPts   = vertcat(strokes.MidPoint);     % Nx3
-        endPts   = vertcat(strokes.EndPoint);     % Nx3
-    else
-        startPts = zeros(0,3); midPts = zeros(0,3); endPts = zeros(0,3);
-    end
-
+    export_path_last_folder = export_path_folders{end};
     lognorm_table = table([strokes.Id]', [strokes.D]', [strokes.Mu]', [strokes.Sigma]', [strokes.To]', ...
-        startPts(:,1), startPts(:,2), startPts(:,3), ...
-        midPts(:,1), midPts(:,2), midPts(:,3), ...
-        endPts(:,1), endPts(:,2), endPts(:,3), ...
+        [strokes.StartZenith]', [strokes.StartAzimuth]', ...
+        [strokes.EndZenith]', [strokes.EndAzimuth]', ...
         repmat(metrics.SNR_T, n, 1), repmat(metrics.SNR_V, n, 1), ...
-        'VariableNames', {'stroke','D','mu','sigma','to','start_x','start_y','start_z','mid_x','mid_y','mid_z','end_x','end_y','end_z','snr_t','snr_v'});
+        'VariableNames', {'stroke','D','mu','sigma','to','theta_s', 'psi_s', 'theta_e', 'psi_e','snr_t','snr_v'});
 
     trajectory_table = table(reconstructedTrajectory.t, ...
         reconstructedTrajectory.p(:,1), reconstructedTrajectory.p(:,2), reconstructedTrajectory.p(:,3), ...

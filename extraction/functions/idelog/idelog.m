@@ -100,8 +100,7 @@ function strokes = extractStrokes(ParamiDeLog3D, RecoiDeLog3D, ttotalfirma) %#ok
     strokes = repmat(struct('Id', 0, 'Mu', 0, 'Sigma', 0, 'To', 0, 'D', 0, ...
         'StartPoint', [0 0 0], 'MidPoint', [0 0 0], 'EndPoint', [0 0 0]), nStrokes, 1);
 
-    minima = RecoiDeLog3D.position_minima_velocity_reconstructed;
-        bell   = ParamiDeLog3D.iDeLog_parameters_bell_functions{1};
+    bell   = ParamiDeLog3D.iDeLog_parameters_bell_functions{1};
     tx = RecoiDeLog3D.iDeLog_target_and_intermediate_x_points;
     ty = RecoiDeLog3D.iDeLog_target_and_intermediate_y_points;
     tz = RecoiDeLog3D.iDeLog_target_and_intermediate_z_points;
@@ -127,6 +126,18 @@ function strokes = extractStrokes(ParamiDeLog3D, RecoiDeLog3D, ttotalfirma) %#ok
             RecoiDeLog3D.iDeLog_u_plane_vectors{strokeId}, ...
             RecoiDeLog3D.iDeLog_v_plane_vectors{strokeId}, pLib);
 
+        % Tangent directions at the two ends of the arc, in 3D
+        [tanS, tanE, conv, score] = strokeTangents(thetaS(strokeId), thetaE(strokeId), ...
+            RecoiDeLog3D.iDeLog_u_plane_vectors{strokeId}, ...
+            RecoiDeLog3D.iDeLog_v_plane_vectors{strokeId}, tpNext - tpPrev);
+        if score < 0.99
+            warning('idelog:tangentConvention', ...
+                'Stroke %d: chord/bisector alignment = %.4f (convention %d).', ...
+                strokeId, score, conv);
+        end
+        [zenS, aziS] = dirToSpherical(tanS);
+        [zenE, aziE] = dirToSpherical(tanE);
+
         % The console prints D with 2 decimals, hence the 0.006 tolerance
         if abs(D - parsed(2)) > 0.006
             warning('idelog:amplitudeMismatch', ...
@@ -145,8 +156,39 @@ function strokes = extractStrokes(ParamiDeLog3D, RecoiDeLog3D, ttotalfirma) %#ok
         strokes(strokeId).EndPoint   = tpNext;
         strokes(strokeId).UVector    = RecoiDeLog3D.iDeLog_u_plane_vectors{strokeId};
         strokes(strokeId).Vvector    = RecoiDeLog3D.iDeLog_v_plane_vectors{strokeId};
-        strokes(strokeId).StartAngle = thetaS(strokeId);
-        strokes(strokeId).EndAngle   = thetaE(strokeId);
-        strokes(strokeId).LibraryIntermediate = pLib;
+
+        strokes(strokeId).StartZenith  = zenS;
+        strokes(strokeId).StartAzimuth = aziS;
+        strokes(strokeId).EndZenith    = zenE;
+        strokes(strokeId).EndAzimuth   = aziE;
+        %strokes(strokeId).LibraryIntermediate = pLib;
     end
+end
+
+function [tanS, tanE, bestConv, bestScore] = strokeTangents(thetaS, thetaE, u, v, chord)
+%STROKETANGENTS Unit tangent vectors at the start and end of a stroke arc.
+%   The convention is chosen so that the bisector of the two tangents
+%   is aligned with the chord (true for any circular arc).
+    u = u(:) / norm(u); v = v(:) / norm(v);
+    chord = chord(:) / norm(chord);
+    basis = {u, v; -v, u};              % convention 1: cos*u + sin*v, 2: cos*(-v) + sin*u
+    bestScore = -inf;
+    for k = 1:2
+        a = basis{k,1}; b = basis{k,2};
+        ts = cos(thetaS) * a + sin(thetaS) * b;
+        te = cos(thetaE) * a + sin(thetaE) * b;
+        bis = ts + te;
+        score = dot(bis / norm(bis), chord);
+        if score > bestScore
+            bestScore = score; bestConv = k;
+            tanS = ts.'; tanE = te.';
+        end
+    end
+end
+
+function [zenith, azimuth] = dirToSpherical(d)
+%DIRTOSPHERICAL Zenith (from +Z) and azimuth (atan2(y,x)) of a direction, in radians.
+    d = d(:) / norm(d);
+    zenith  = acos(max(min(d(3), 1), -1));
+    azimuth = atan2(d(2), d(1));
 end
