@@ -43,8 +43,8 @@ function [trajOut, strokes, snrT, snrV, velocityApproached, idelogObjectResult] 
     set(0, 'DefaultFigureVisible', 'on');
     idelogObjectResult = RecoiDeLog3D;
     zr = RecoiDeLog3D.z_reconstructed;
-    vrReconstructed = RecoiDeLog3D.velocity_reconstruted;   % nome del toolbox, refuso incluso
-
+    vrReconstructed = RecoiDeLog3D.velocity_reconstruted;
+    
     n = numel(xr);
     if numel(vrReconstructed) == n - 1
         vrReconstructed = [NaN; vrReconstructed(:)];
@@ -83,7 +83,6 @@ function strokes = extractStrokes(ParamiDeLog3D, RecoiDeLog3D, ttotalfirma) %#ok
     set(0, 'DefaultFigureVisible', 'off');
 
     consoleText = evalc('[~,~,~,~] = ReconstructiDeLog3D(ParamiDeLog3D, ttotalfirma, 1, 1);');
-    
     newFigs = setdiff(findall(groot, 'Type', 'figure'), figsBefore);
     close(newFigs);
     set(0,'DefaultFigureVisible', 'on')
@@ -101,51 +100,53 @@ function strokes = extractStrokes(ParamiDeLog3D, RecoiDeLog3D, ttotalfirma) %#ok
     strokes = repmat(struct('Id', 0, 'Mu', 0, 'Sigma', 0, 'To', 0, 'D', 0, ...
         'StartPoint', [0 0 0], 'MidPoint', [0 0 0], 'EndPoint', [0 0 0]), nStrokes, 1);
 
+    minima = RecoiDeLog3D.position_minima_velocity_reconstructed;
+        bell   = ParamiDeLog3D.iDeLog_parameters_bell_functions{1};
+    tx = RecoiDeLog3D.iDeLog_target_and_intermediate_x_points;
+    ty = RecoiDeLog3D.iDeLog_target_and_intermediate_y_points;
+    tz = RecoiDeLog3D.iDeLog_target_and_intermediate_z_points;
+    thetaS = RecoiDeLog3D.iDeLog_start_angles(:);
+    thetaE = RecoiDeLog3D.iDeLog_end_angles(:);
 
-    position_minima_indexes = RecoiDeLog3D.position_minima_velocity_reconstructed;
+    % Layout: row k = virtual target tp_(k-1), col 1 = target, col 2 = library intermediate
+    assert(size(tx,1) == nStrokes + 1, 'idelog:layout', ...
+        'Expected %d rows in target/intermediate points, found %d.', ...
+        nStrokes + 1, size(tx,1));
+
     for i = 1:nStrokes
-        parsed = cellfun(@str2double, tokens{i});
+        parsed   = cellfun(@str2double, tokens{i});
         strokeId = parsed(1);
-        startPointIndex = position_minima_indexes(2*(strokeId-1) + 1);
-        midPointIndex = position_minima_indexes(2*(strokeId-1) + 2);
-        endPointIndex = position_minima_indexes(2*(strokeId-1) + 3);
-        startPoint = [RecoiDeLog3D.x_reconstructed(startPointIndex), ...
-                      RecoiDeLog3D.y_reconstructed(startPointIndex), ...
-                      RecoiDeLog3D.z_reconstructed(startPointIndex)];
-        midPoint = [RecoiDeLog3D.x_reconstructed(midPointIndex), ...
-                    RecoiDeLog3D.y_reconstructed(midPointIndex), ...
-                    RecoiDeLog3D.z_reconstructed(midPointIndex)];
-        endPoint = [RecoiDeLog3D.x_reconstructed(endPointIndex), ...
-                    RecoiDeLog3D.y_reconstructed(endPointIndex), ...
-                    RecoiDeLog3D.z_reconstructed(endPointIndex)];
-        
-        %[midX, midY, midZ] = computeIntermediatePoint( ...
-        %    startPoint, endPoint, ...
-        %    -RecoiDeLog3D.iDeLog_v_plane_vectors{strokeId}', ...
-        %    RecoiDeLog3D.iDeLog_u_plane_vectors{strokeId}', ...
-        %    RecoiDeLog3D.iDeLog_start_angles(strokeId), ...
-        %    RecoiDeLog3D.iDeLog_end_angles(strokeId));
 
-        
-        strokes(strokeId).Id = strokeId;
-        % params
-        strokes(strokeId).MidPoint = midPoint;
-        strokes(strokeId).D = arcLength3Points(startPoint, strokes(strokeId).MidPoint, endPoint);
-        strokes(strokeId).Mu = ParamiDeLog3D.iDeLog_parameters_bell_functions{1}(strokeId, 2);
-        strokes(strokeId).Sigma = ParamiDeLog3D.iDeLog_parameters_bell_functions{1}(strokeId, 3);
-        strokes(strokeId).To = parsed(5);
-        
-        % space
-        strokes(strokeId).StartPoint = startPoint;
-        strokes(strokeId).EndPoint = endPoint;
-        strokes(strokeId).UVector = RecoiDeLog3D.iDeLog_u_plane_vectors;
-        strokes(strokeId).Vvector = RecoiDeLog3D.iDeLog_v_plane_vectors;
-        strokes(strokeId).StartAngle = RecoiDeLog3D.iDeLog_start_angles;
-        strokes(strokeId).EndAngle = RecoiDeLog3D.iDeLog_end_angles;
+        tpPrev = [tx(strokeId,1),   ty(strokeId,1),   tz(strokeId,1)];
+        tpNext = [tx(strokeId+1,1), ty(strokeId+1,1), tz(strokeId+1,1)];
+        pLib   = [tx(strokeId,2),   ty(strokeId,2),   tz(strokeId,2)];
 
-        % space (idelog)
-        strokes(strokeId).iDeLog_target_and_intermediate_x_points = RecoiDeLog3D.iDeLog_target_and_intermediate_x_points;
-        strokes(strokeId).iDeLog_target_and_intermediate_y_points = RecoiDeLog3D.iDeLog_target_and_intermediate_y_points;
-        strokes(strokeId).iDeLog_target_and_intermediate_z_points = RecoiDeLog3D.iDeLog_target_and_intermediate_z_points;
+        % Eq. (19): D = r * |theta_e - theta_s| on the arc tp_(j-1) -> tp_j
+        [D, midPoint] = arcFromAngles(tpPrev, tpNext, ...
+            thetaS(strokeId), thetaE(strokeId), ...
+            RecoiDeLog3D.iDeLog_u_plane_vectors{strokeId}, ...
+            RecoiDeLog3D.iDeLog_v_plane_vectors{strokeId}, pLib);
+
+        % The console prints D with 2 decimals, hence the 0.006 tolerance
+        if abs(D - parsed(2)) > 0.006
+            warning('idelog:amplitudeMismatch', ...
+                'Stroke %d: D from Eq. (19) = %.4f, console D = %.4f.', ...
+                strokeId, D, parsed(2));
+        end
+
+        strokes(strokeId).Id         = strokeId;
+        strokes(strokeId).D          = D;
+        strokes(strokeId).Mu         = bell(strokeId, 3);   % columns 2 and 3 are [sigma, mu]
+        strokes(strokeId).Sigma      = bell(strokeId, 2);
+        strokes(strokeId).To         = parsed(5);
+
+        strokes(strokeId).StartPoint = tpPrev;              % virtual targets, not on the trajectory
+        strokes(strokeId).MidPoint   = midPoint;
+        strokes(strokeId).EndPoint   = tpNext;
+        strokes(strokeId).UVector    = RecoiDeLog3D.iDeLog_u_plane_vectors{strokeId};
+        strokes(strokeId).Vvector    = RecoiDeLog3D.iDeLog_v_plane_vectors{strokeId};
+        strokes(strokeId).StartAngle = thetaS(strokeId);
+        strokes(strokeId).EndAngle   = thetaE(strokeId);
+        strokes(strokeId).LibraryIntermediate = pLib;
     end
 end
