@@ -1,0 +1,35 @@
+@startuml reconstruct
+participant haptic_interaction_teach_and_record_controller as controller
+collections recordings
+participant pipeline
+participant chebyshev
+participant resampler
+participant find_minimas_maximas
+participant curve_fitting
+participant speed_approximation
+collections reconstructions
+loop for each experiment
+controller -> recordings: Record movement
+end
+...
+loop for each file in recordings
+    pipeline -> recordings: File system call\nread file
+    recordings --> pipeline: Content (timestamped\npositions and twists)
+    pipeline -> chebyshev: Apply Chebyshev filter
+    chebyshev --> pipeline: Filtered data
+    pipeline -> resampler: Resample data
+    resampler --> pipeline: Resampled data
+    pipeline -> find_minimas_maximas: Process content
+    find_minimas_maximas --> pipeline: minimas, maximas
+
+    pipeline -> speed_approximation: Approximate speed (twists, positions, minimas)
+    speed_approximation --> pipeline: Approximated speed parameters (mu, sigma, t0, D)
+
+    pipeline -> pipeline: Filter consecutive strokes by length
+
+    pipeline -> curve_fitting: Fit curve, (positions, Ds, minimas)
+    curve_fitting --> pipeline: Fitted curve parameters
+
+    pipeline -> reconstructions: Save reconstruction
+end
+@enduml

@@ -1,13 +1,14 @@
 from . import Stroke
 import math
 import numpy as np
+from collections.abc import Collection
 
 class StrokeSequence:
     """
     Ordered sequence of lognormal velocity strokes.
     """
 
-    def __init__(self, strokes):
+    def __init__(self, strokes: Collection[Stroke]):
         strokes = list(strokes)
 
         if not strokes:
@@ -91,4 +92,18 @@ class StrokeSequence:
         """Return a deep copy of the StrokeSequence."""
         return StrokeSequence([stroke.copy() for stroke in self._strokes])
 
+    def filter_strokes_by_peak(self, velocity_threshold):
+            """Skip the weak strokes at the beginning, keep the strong ones, stop at the first weak one after them.
+    
+            Returns the kept strokes and the first weak stroke found after them (corrective last stroke), or None.
+            """
+            filtered, corrective = [], None
+            for stroke in self._strokes:
+                _, v_peak = stroke.lognormal_peak()
+                if v_peak >= velocity_threshold:
+                    filtered.append(stroke)
+                elif filtered:
+                    corrective = stroke
+                    break
+            return filtered, corrective
     

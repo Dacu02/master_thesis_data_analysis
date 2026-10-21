@@ -1,0 +1,17 @@
+@startuml curve_fit
+participant pipeline
+participant curve_fitting
+hide footbox
+
+pipeline -> curve_fitting: Fit curve (positions, Ds, minimas)
+curve_fitting -> direction_extraction: Obtain boundary\ndirections from curve
+direction_extraction --> curve_fitting: Directions
+curve_fitting -> curve_fitting: Set Bezier parameters\n(P0, P3, D, directions)
+curve_fitting -> lsq: Fit curve without constraints
+LSQ --> LSQ: Bezier minimizing\nMSE against recording
+LSQ --> curve_fitting: Starting lambdas solution
+curve_fitting -> SLSQP: Fit curve with D lenght constraint
+SLSQP --> SLSQP: Bezier minimizing\nMSE against recording
+SLSQP --> curve_fitting: Lambdas solution
+curve_fitting --> pipeline: Fitted curve parameters
+@enduml

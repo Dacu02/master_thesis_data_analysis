@@ -1,6 +1,7 @@
 import math
 import matplotlib.pyplot as plt
 import numpy as np
+from sympy import erfinv
 
 
 class Stroke:
@@ -117,4 +118,24 @@ class Stroke:
             mu=self.mu,
             sigma=self.sigma,
             to=self.to,
+        )
+    
+    def lognormal_peak(self):
+        """Time and value of the speed maximum of a single lognormal stroke."""
+        t0 = float(self.to)
+        mu = float(self.mu)
+        sigma = float(self.sigma)
+        D = abs(float(self.D))
+
+        t_peak = t0 + np.exp(mu - sigma**2)
+        v_peak = D / (sigma * np.sqrt(2 * np.pi)) * np.exp(-mu + sigma**2 / 2)
+        return t_peak, v_peak
+
+
+
+    def lognormal_time_at_fraction(self, fraction):
+        """Return the time at which a stroke reaches a fraction of its distance."""
+        return float(self.to) + np.exp(
+            float(self.mu)
+            + float(self.sigma) * np.sqrt(2.0) * erfinv(2.0 * fraction - 1.0)
         )

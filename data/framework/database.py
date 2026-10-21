@@ -15,17 +15,18 @@ import yaml
 from scipy.signal import find_peaks
 from scipy.optimize import brentq
 from scipy.special import erf, erfinv
+from scipy.integrate import cumulative_trapezoid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ------------------------------------------------------------------ Input files
-CSV_ROOT = os.path.join(os.getcwd()).split('src')[0] + "recording_csv"
+CSV_ROOT = os.path.join(os.getcwd()).split('src')[0] + "/recording_csv"
 CSV_FILES = sorted(Path(CSV_ROOT).glob("**/*.csv"))
-YAML_PATHS_FILE = os.path.join(os.getcwd()).split('src')[0] + "src/unisa_acg_ros2/haptics/haptic_interaction_teach_and_record_demo/config/paths.yaml"
-OUTPUT_ROOT = os.path.join(os.getcwd()).split('src')[0] + "reconstructed_csv"
+YAML_PATHS_FILE = os.path.join(os.getcwd()).split('src')[0] + "/src/unisa_acg_ros2/haptics/haptic_interaction_teach_and_record_demo/config/paths.yaml"
+OUTPUT_ROOT = os.path.join(os.getcwd()).split('src')[0] + "/reconstructed_csv"
 DEBUG = False
-
 POSITION_COLUMNS = ["position_x", "position_y", "position_z"]
 VELOCITY_COLUMNS = ["twist_linear_x", "twist_linear_y", "twist_linear_z"]
+GEOMETRY_OUTPUT_COLUMNS = ['lambda_s', 'u_s', 'lambda_e', 'u_e', 'delta_p']
 
 # ------------------------------------------------- Low-pass Chebyshev II filter
 FILTER_ORDER = 11
@@ -67,6 +68,7 @@ TRIM_END_M = 0.001       # 1 mm
 TIME_DISTANCE = .1 #s
 PROMINENCE = .005 #m/s
 VEL_THRESHOLD = 0.2 #m/s
+
 
 def load_waypoints(yaml_file, task):
     with open(yaml_file, "r") as f:
@@ -127,43 +129,6 @@ def lognormal_cdf(t, t0, mu, sigma):
         1.0 + erf((np.log(tau[positive]) - mu[positive]) / (sigma[positive] * np.sqrt(2.0)))
     )
     return out
-
-def lognormal_peak(stroke):
-    """Time and value of the speed maximum of a single lognormal stroke."""
-    t0 = float(stroke.to)
-    mu = float(stroke.mu)
-    sigma = float(stroke.sigma)
-    D = abs(float(stroke.D))
-
-    t_peak = t0 + np.exp(mu - sigma**2)
-    v_peak = D / (sigma * np.sqrt(2 * np.pi)) * np.exp(-mu + sigma**2 / 2)
-    return t_peak, v_peak
-
-
-def lognormal_time_at_fraction(stroke, fraction):
-    """Return the time at which a stroke reaches a fraction of its distance."""
-    return float(stroke.to) + np.exp(
-        float(stroke.mu)
-        + float(stroke.sigma) * np.sqrt(2.0) * erfinv(2.0 * fraction - 1.0)
-    )
-
-
-def filter_strokes_by_peak(strokes, velocity_threshold):
-    """Skip the weak strokes at the beginning, keep the strong ones, stop at the first weak one after them.
-
-    Returns the kept strokes and the first weak stroke found after them (corrective last stroke), or None.
-    """
-    filtered, corrective = [], None
-    for stroke in strokes:
-        _, v_peak = lognormal_peak(stroke)
-        if v_peak >= velocity_threshold:
-            filtered.append(stroke)
-        elif filtered:
-            corrective = stroke
-            break
-    return filtered, corrective
-
-
 
 def trim_strokes(strokes_to_trim, trim_start_m, trim_end_m=None) -> tuple[np.ndarray, tuple[float, float]]:
     """Trim the first and the last metres travelled by the strokes and shift the onsets.
@@ -226,17 +191,23 @@ def trim_strokes(strokes_to_trim, trim_start_m, trim_end_m=None) -> tuple[np.nda
 
     return t0 - t_start, (float(t_start), float(t_end)) # type: ignore
 
+def path_fraction(t_seg, speed_seg):
+  cumulative = cumulative_trapezoid(speed_seg, t_seg, initial=0.0)
+  if cumulative[-1] <= 0:
+    raise ValueError("The model speed is zero over this segment.")
+  return cumulative / cumulative[-1], cumulative[-1]
+
 def process_file(file):
 
     ls = LeastSquares(lock_D=LOCK_D_TO_GEOMETRY, refine=False)
-    approx = CubicBezierC1Approximation()
+    approx = BezierOptimization()
     filter = Chebyshev(order=FILTER_ORDER, cutoff=FILTER_CUTOFF_HZ, stopband_attenuation=FILTER_STOPBAND_DB)
     resampler = Resample(target_fs=TARGET_FREQUENCY)
 
     try:
         subject, task, recording_id = file.parts[-3], file.parts[-2], int(file.stem.split("_")[-1])
         waypoints = load_waypoints(YAML_PATHS_FILE, task)
-        waypoints_xyz = waypoints_to_array(waypoints, SWAP_YZ_WAYPOINTS, WS_MIN, WS_MAX)
+        #waypoints_xyz = waypoints_to_array(waypoints, SWAP_YZ_WAYPOINTS, WS_MIN, WS_MAX)
 
         csv_data = pd.read_csv(file)
         csv_data['timestamp'] = csv_data['timestamp'] - csv_data['timestamp'].iloc[0]  # normalize timestamps to start at 0
@@ -253,7 +224,7 @@ def process_file(file):
                 y   = csv_data['position_y'].to_numpy(),
                 z   = csv_data['position_z'].to_numpy(),
             ),
-                t   = csv_data['timestamp'].to_numpy()
+            t   = csv_data['timestamp'].to_numpy()
         )
 
         recording.trajectory = resampler.apply(filter.apply(recording.trajectory)) # type: ignore
@@ -289,12 +260,30 @@ def process_file(file):
         filtered_strokes = []
         corrective_last_stroke = None
 
-        filtered_strokes, corrective_last_stroke = filter_strokes_by_peak(strokes, VEL_THRESHOLD)
+        filtered_strokes, corrective_last_stroke = strokes.filter_strokes_by_peak(VEL_THRESHOLD)
 
-        Ds = [stroke.D for stroke in strokes]
+        minima_idx_strokes = []
+        for stroke in filtered_strokes:
+            k = strokes.index(stroke)
+            minima_idx_strokes.append(minima_idx[k])
+            minima_idx_strokes.append(minima_idx[k + 1])
+        minima_idx_strokes = sorted(set(minima_idx_strokes))
 
-        approx.set_problem(trajectory=recording.trajectory, boundaries=minima_idx, D=Ds) # type: ignore
-        
+        Ds = [stroke.D for stroke in filtered_strokes]
+
+        fractions = []
+        for a, b in zip(minima_idx_strokes[:-1], minima_idx_strokes[1:]):
+            frac, _ = path_fraction(t[a:b + 1], reconstructed_speed[a:b + 1])
+            fractions.append(frac)
+
+        approx.set_problem(
+            minima_idx=minima_idx_strokes,
+            Ds=Ds,
+            output_sigma=fractions,
+            lambda_min=1e-3,
+            lambda_max=None,
+            direction_distance=0.01,
+        )
         curve_parameters, bezier = approx.approximate(recording.curve)
 
         # HL indexes
@@ -334,7 +323,7 @@ def process_file(file):
 
         hl_speed = HL(recording.trajectory.speed, reconstructed_speed, len(filtered_strokes), len(waypoints) - 1)
         
-        i0, i1 = minima_idx[0], minima_idx[-1]
+        i0, i1 = minima_idx_strokes[0], minima_idx_strokes[-1]
         curve_cropped = Curve(
             x=recording.curve.x[i0:i1+1],
             y=recording.curve.y[i0:i1+1],
@@ -346,11 +335,8 @@ def process_file(file):
         output_file = os.path.join(OUTPUT_ROOT, subject, task, "recording_" + str(recording_id) + ".csv")
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-        keys_ordered = list(curve_parameters['by_stroke'][0].keys())
-        keys_ordered.remove('stroke')
-        keys_ordered.remove('duration')
         with open(output_file, "w") as f:
-            f.write(f"stroke_id,t0,mu,sigma,D,{','.join(keys_ordered)}\n")
+            f.write(f"stroke_id,t0,mu,sigma,D,{','.join(GEOMETRY_OUTPUT_COLUMNS)}\n")
 
             # check if a previous stroke does still have an effect on the first filtered stroke
             #if strokes.index(filtered_strokes[0]) > 0:
@@ -361,11 +347,9 @@ def process_file(file):
             #    print(f"Previous stroke 95% time: {previous_stroke_95_time}, Current stroke 5% time: {current_stroke_start_time} in file {file}")
             for stroke in filtered_strokes:
                 f.write(f"{filtered_strokes.index(stroke)},{stroke.to},{stroke.mu},{stroke.sigma},{stroke.D}")
-                for key in keys_ordered:
-                    value = curve_parameters['by_stroke'][strokes.index(stroke)][key]
-                    if isinstance(value, np.ndarray):
-                        value_str = ';'.join(map(str, value))
-                    elif isinstance(value, (list, tuple)):
+                for key in GEOMETRY_OUTPUT_COLUMNS:
+                    value = curve_parameters[filtered_strokes.index(stroke)][key]
+                    if isinstance(value, np.ndarray) or isinstance(value, (list, tuple)):
                         value_str = ';'.join(map(str, value))
                     else:
                         value_str = str(value)
@@ -373,11 +357,47 @@ def process_file(file):
                 f.write("\n")
         return (file, "ok", {"hl_speed": hl_speed, "mse": mse_curve, "max_err": max_err})
     except Exception as e:
+        if DEBUG:
+            raise e
         return (file, "error", str(e))
 
+if __name__ == '__main__':
+    results = []
+    if not DEBUG:
+        with ProcessPoolExecutor(max_workers=os.cpu_count() - 1) as pool: # type: ignore
+            futures = {pool.submit(process_file, f): f for f in CSV_FILES}
+            for fut in as_completed(futures):
+                file, status, msg = fut.result()
+                print(f"{str(file).split('recording_csv')[-1]}: {status} {msg}")
+                if status == "ok":
+                    results.append(msg)
+    else:
+        for f in CSV_FILES:
+            file, status, msg = process_file(f)
+            print(f"{str(file).split('recording_csv')[-1]}: {status} {msg}")
+            if status == "ok":
+                results.append(msg)
 
-with ProcessPoolExecutor(max_workers=os.cpu_count() - 1) as pool:
-    futures = {pool.submit(process_file, f): f for f in CSV_FILES}
-    for fut in as_completed(futures):
-        file, status, msg = fut.result()
-        print(f"{file.name}: {status} {msg}")
+    if results:
+        mse_values = [result["mse"] for result in results]
+        hl_values = [result["hl_speed"] for result in results]
+        print(f"Average curve MSE: {np.mean(mse_values)}")
+        print(f"Average HL speed: {np.mean(hl_values)}")
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+        axes[0].hist(mse_values, bins="auto", edgecolor="black")
+        axes[0].set_title("Reconstructed vs Recorded Curve MSE")
+        axes[0].set_xlabel("MSE")
+        axes[0].set_ylabel("Frequency")
+
+        axes[1].hist(hl_values, bins="auto", edgecolor="black")
+        axes[1].set_title("Reconstructed vs Recorded Speed SNR")
+        axes[1].set_xlabel("SNR")
+        axes[1].set_ylabel("Frequency")
+
+        fig.tight_layout()
+        plt.show()
+        
+
+
+            

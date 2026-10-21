@@ -1,0 +1,21 @@
+@startuml speed_approx
+participant pipeline
+participant stroke_length
+participant speed_approximation
+participant least_squares
+hide footbox
+pipeline -> speed_approximation: Approximate speed (twists, positions, minimas)
+speed_approximation -> speed_approximation: Split trajectory\nbetween minimas
+speed_approximation -> stroke_length: Compute strokes length (positions, minimas)
+stroke_length --> speed_approximation: Ds
+
+speed_approximation -> speed_approximation: Compute segment speed\nfrom twists
+loop for each segment
+  speed_approximation -> least_squares: Fit segment speed profile\nwith lognormal (speed, D)
+  least_squares --> least_squares: Lognormal parameters that\nminimize MSE against speed
+  least_squares --> speed_approximation: Lognormal parameters\n(mu, sigma, t0)
+  speed_approximation -> speed_approximation: Subtract the stroke\nfrom speed
+end
+
+speed_approximation --> pipeline: Approximated speed parameters (mu, sigma, t0, D)
+@enduml
