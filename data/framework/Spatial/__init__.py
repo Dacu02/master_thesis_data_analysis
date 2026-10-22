@@ -1,6 +1,3 @@
 from .Curve import Curve
 from .Approximate import Approximate
 from .BezierOptimization import BezierOptimization
-from .CubicBezierC1Approximation import CubicBezierC1Approximation
-from .CubicBezierG1Approximation import CubicBezierG1Approximation
-from .QuinticBezierC2Approximation import QuinticBezierC2Approximation

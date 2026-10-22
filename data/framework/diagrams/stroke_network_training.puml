@@ -1,0 +1,41 @@
+@startuml stroke_network_training
+title Stroke network - training
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+participant "Data pipeline" as D
+participant "Network" as N #E6E0FA
+participant "Loss" as L
+participant "Trainer" as T
+
+== Data preparation ==
+D -> D : Express each stroke in its own frame\n(origin = its start)
+D -> D : Pair with previous stroke,\nflag first strokes
+D -> D : Split by subject,\nstandardize with train statistics
+
+== Initialization ==
+T -> N : Initialize mixture from data statistics
+
+== Training ==
+loop each epoch
+  loop each mini-batch
+    D -> N : Waypoints, first-stroke flag,\ntrue previous stroke
+    D -> L : True stroke parameters
+    N -> L : Predicted mixture\n(weights, means, covariances)
+    L -> L : Mixture negative log-likelihood\nof the true stroke
+    L --> N : Backpropagate error
+    N -> T : Gradients
+    T -> N : Clip gradients, update weights
+  end
+
+  == Validation ==
+  T -> N : Forward held-out subjects
+  N -> L : Predicted mixture
+  L --> T : Validation NLL
+  T -> T : Save checkpoint if best,\nstop if no improvement
+end
+
+== Model selection ==
+T -> N : Restore best weights
+@enduml
