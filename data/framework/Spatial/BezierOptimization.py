@@ -109,29 +109,81 @@ class BezierOptimization(Approximate):
     return sigma_out
 
   @staticmethod
-  def _boundary_direction(points: np.ndarray, i0: int, i1: int, min_dist: float, from_start: bool) -> np.ndarray:
+  def _point_at_distance(points: np.ndarray, anchor: int, indices: range,
+                         radius: float | None) -> np.ndarray | None:
     """
-    Unit tangent direction at one end of the segment points[i0:i1 + 1].
-    The returned vector always points along the direction of travel.
+    Point where the polyline that starts at points[anchor] and goes through
+    points[indices[0]], points[indices[1]], ... first reaches the Euclidean distance
+    `radius` from points[anchor]. The crossing between the last sample inside the sphere
+    and the first one outside it is found by linear interpolation. If radius is None or
+    not positive, the first sample distinct from points[anchor] is returned.
+    Returns None if the polyline never reaches the required distance.
+    """
+    if radius is not None and radius <= 0:
+      radius = None
 
-    mode="chord": the distance is the straight-line (Euclidean) distance between
-        the end point and a candidate sample; the direction is the chord from the
-        end point to the first sample at least `min_dist` away from it.
-    mode="path": the distance is the path length accumulated sample by sample from
-        the end point; the direction is that of the single step at which the
-        accumulated length first reaches `min_dist` (original behaviour).
+    center = points[anchor]
+    previous = center
+    for j in indices:
+      current = points[j]
+      distance = np.linalg.norm(current - center)
+      if distance > 0 and (radius is None or distance >= radius):
+        if radius is None:
+          return current
+        # Solve |previous + t * (current - previous) - center| = radius for t in (0, 1]
+        a = current - previous
+        b = previous - center
+        aa, ab, c = a @ a, a @ b, b @ b - radius ** 2
+        t = (-ab + np.sqrt(ab ** 2 - aa * c)) / aa
+        return previous + t * a
+      previous = current
+    return None
+
+  @classmethod
+  def _boundary_direction(cls, points: np.ndarray, i0: int, i1: int,
+                          min_dist: float | None, from_start: bool) -> np.ndarray:
+    """
+    Unit tangent direction at one end of the segment points[i0:i1 + 1], estimated with
+    the chord between that end point and the point where the segment crosses the sphere
+    of radius min_dist centered at it. The returned vector always points along the
+    direction of travel.
     """
     if from_start:
-      anchor, indices = points[i0], range(i0 + 1, i1 + 1)
+      anchor, indices = i0, range(i0 + 1, i1 + 1)
     else:
-      anchor, indices = points[i1], range(i1 - 1, i0 - 1, -1)
+      anchor, indices = i1, range(i1 - 1, i0 - 1, -1)
 
-    for j in indices:
-      chord = (points[j] - anchor) if from_start else (anchor - points[j])
-      norm = np.linalg.norm(chord)
-      if norm >= min_dist and norm > 0:
-        return chord / norm
-    raise ValueError("The segment is shorter than direction_distance: cannot estimate the tangent direction.")
+    crossing = cls._point_at_distance(points, anchor, indices, min_dist)
+    if crossing is None:
+      raise ValueError(
+        f"Cannot estimate the tangent direction at end point {anchor}: the segment never "
+        f"gets farther than direction_distance from it.")
+
+    chord = (crossing - points[anchor]) if from_start else (points[anchor] - crossing)
+    return chord / np.linalg.norm(chord)
+
+  @classmethod
+  def _junction_direction(cls, points: np.ndarray, k: int, lo: int, hi: int,
+                          min_dist: float | None) -> np.ndarray:
+    """
+    Unit tangent direction at the interior junction points[k], estimated with the chord
+    between the two points where the curve crosses the sphere of radius min_dist centered
+    at points[k]: one before the junction (samples in [lo, k)) and one after it (samples
+    in (k, hi]). Both chord ends are exactly min_dist away from the junction, so the
+    neighbourhood is symmetric in space. The returned vector points along the direction of travel.
+    """
+    behind = cls._point_at_distance(points, k, range(k - 1, lo - 1, -1), min_dist)
+    ahead = cls._point_at_distance(points, k, range(k + 1, hi + 1), min_dist)
+    if behind is None or ahead is None:
+      raise ValueError(
+        f"Cannot estimate the tangent direction at junction {k}: a neighbouring segment "
+        f"never gets farther than direction_distance from the junction.")
+
+    chord = ahead - behind
+    norm = np.linalg.norm(chord)
+    if norm == 0:
+      raise ValueError(f"Degenerate chord at junction {k}: the two crossing points coincide.")
+    return chord / norm
 
   def _fit_segment(self, segment_points, sigma, p0, p3, first_direction, last_direction,
                    length, lambda_min, lambda_max, plot_comparison=False):
@@ -243,7 +295,7 @@ class BezierOptimization(Approximate):
                   Ds: list[float],
                   lambda_min: float = 1e-3,
                   lambda_max: float | None = None,
-                  direction_distance: float = 0.001,
+                  direction_distance: float|None = None,
                   output_sigma: list | None = None,
                   plot_comparison: bool = False,
                   skip_discrete_step: bool = False):
@@ -263,9 +315,9 @@ class BezierOptimization(Approximate):
         Maximum allowed tangent length. If None, it is chosen per segment as
         max(2 * chord, Ds[i]), where chord is the distance between the segment end points.
         Default is None.
-    direction_distance : float, optional
+    direction_distance : float | None, optional
         Minimum distance from a segment end point used to estimate the tangent direction
-        (same units as the curve). Default is 0.001.
+        (same units as the curve).
     output_sigma : list of np.ndarray or None, optional
         Optional timing law used to *generate* the output samples. One array per segment,
         with one value per curve sample of the segment (minima_idx[i + 1] - minima_idx[i] + 1),
@@ -276,10 +328,10 @@ class BezierOptimization(Approximate):
         independently of the data timing and of the Bezier parametric speed. For a lognormal
         stroke use `lognormal_fraction(t, t0, mu, sd)`. If None, each sample keeps the position
         it has in the fit. Default is None.
-      plot_comparison : bool, optional
+    plot_comparison : bool, optional
         If True, display a 3D comparison of the affine and arc-length solver
         solutions for each segment. Default is False.
-      skip_discrete_step : bool, optional
+    skip_discrete_step : bool, optional
         If True, skip the discrete step of the optimization (after the least-squares fit) and
         only perform the continuous step (the arc-length constrained optimization).
     """
@@ -335,6 +387,15 @@ class BezierOptimization(Approximate):
 
     spline_parameters = []
     full_approximation_points = []
+    
+    # Tangent directions at the curve end points and at every interior junction;
+    # each interior direction is shared by the two segments that meet there
+    directions = [None] * len(idx)
+    directions[0] = self._boundary_direction(curve_points, idx[0], idx[1], self.direction_distance, True)
+    directions[-1] = self._boundary_direction(curve_points, idx[-2], idx[-1], self.direction_distance, False)
+    for k in range(1, len(idx) - 1):
+      directions[k] = self._junction_direction(
+        curve_points, idx[k], idx[k - 1], idx[k + 1], self.direction_distance)
 
     for i in range(len(idx) - 1):
       i0, i1 = idx[i], idx[i + 1]
@@ -343,8 +404,8 @@ class BezierOptimization(Approximate):
       n = segment_points.shape[0]
       p0, p3 = segment_points[0], segment_points[-1]
 
-      first_direction = self._boundary_direction(curve_points, i0, i1, self.direction_distance, True)
-      last_direction = self._boundary_direction(curve_points, i0, i1, self.direction_distance, False)
+      first_direction = directions[i]
+      last_direction = directions[i + 1]
 
       steps = np.linalg.norm(np.diff(segment_points, axis=0), axis=1)
       total = steps.sum()
@@ -379,3 +440,4 @@ class BezierOptimization(Approximate):
     points = np.concatenate(full_approximation_points, axis=0)
     t = np.asarray(curve.t, dtype=float)[idx[0]:idx[-1] + 1]   # same samples as the output points
     return spline_parameters, Curve(x=points[:, 0], y=points[:, 1], z=points[:, 2], t=t)
+
