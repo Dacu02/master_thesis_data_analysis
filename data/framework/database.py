@@ -46,19 +46,13 @@ FIT_OPTIONS = dict(
     max_lead=1.0,              # t0 may precede the window start by max_lead * window duration
 )
 
-# --------------------------------------------------------------- Joint refinement
-REFINE_OPTIONS = dict(
-    t0_shift_frac=0.5,  # t0 may move by +/- this fraction of the stroke window duration
-    mu_shift=1.0,       # mu may move by +/- this amount
-    reg_weight=0.0,     # > 0 pulls the parameters toward the sequential solution
-)
-
 # ------------------------------------------------------------------------ Lengths
 LOCK_D_TO_GEOMETRY = True  # D of each stroke = measured path length between its two speed minima
 
 # ------------------------------------------------------- Geometric reconstruction
 ANGLE_STEP_RAD = np.deg2rad(1.0)  # angular sensitivity of the exit/entry angles
 ANGLE_LIMITS = (-np.pi, np.pi)
+DIRECTION_DISTANCE = 7e-3          # m: radius of the neighbourhood used for the junction tangents
 
 # ------------------------------------------ Model speed trimmed by travelled distance
 TRIM_START_M = 0.001     # 1 mm
@@ -68,6 +62,7 @@ TRIM_END_M = 0.001       # 1 mm
 TIME_DISTANCE = .1 #s
 PROMINENCE = .005 #m/s
 VEL_THRESHOLD = 0.2 #m/s
+MAX_ENDPOINT_REL_ERROR = None # maximum relative error of the stroke end points with respect to the nominal segment
 
 
 def load_waypoints(yaml_file, task):
@@ -230,131 +225,56 @@ def process_file(file):
         recording.trajectory = resampler.apply(filter.apply(recording.trajectory)) # type: ignore
         recording.curve = resampler.apply(filter.apply(recording.curve)) # type: ignore
 
-        minima_idx, maxima_idx = find_minima_maxima(recording.trajectory.speed, samples_distance=int(TIME_DISTANCE * TARGET_FREQUENCY), prominence = PROMINENCE)
+        minima_idx, maxima_idx = find_minima_maxima(recording.trajectory.speed, samples_distance=int(TIME_DISTANCE * TARGET_FREQUENCY), prominence=PROMINENCE)
         ls.set_boundaries(minima_idx)
         strokes = ls.approximate(recording)
-        
         t = recording.t
-        reconstructed_speed = np.zeros_like(t, dtype=float)
-        stroke_densities = []
 
-        for stroke in strokes:
-            t0 = float(stroke.to)
-            mu = float(stroke.mu)
-            sigma = float(stroke.sigma)
-            D = abs(float(stroke.D))
-
-            tau = t - t0
-            valid = tau > 0
-            density = np.zeros_like(t, dtype=float)
-
-            density[valid] = (
-                D
-                / (sigma * np.sqrt(2 * np.pi) * tau[valid])
-                * np.exp(-((np.log(tau[valid]) - mu) ** 2) / (2 * sigma**2))
-            )
-
-            reconstructed_speed += density
-            stroke_densities.append(density)
-
-        filtered_strokes = []
-        corrective_last_stroke = None
-
+        # Contiguous strokes whose peak speed reaches the threshold: one per segment of the task
         filtered_strokes, corrective_last_stroke = strokes.filter_strokes_by_peak(VEL_THRESHOLD)
+        n_segments = len(waypoints) - 1
+        if len(filtered_strokes) != n_segments:
+            if DEBUG:
+                plot_filtered_strokes(recording, strokes, filtered_strokes, f"{subject} {task} {file.name}")
+            return (file, "warning", f"Number of filtered strokes ({len(filtered_strokes)}) does not match number of segments ({n_segments}).")
 
-        minima_idx_strokes = []
-        for stroke in filtered_strokes:
-            k = strokes.index(stroke)
-            minima_idx_strokes.append(minima_idx[k])
-            minima_idx_strokes.append(minima_idx[k + 1])
-        minima_idx_strokes = sorted(set(minima_idx_strokes))
+        # Stroke k spans the window [minima_idx[k], minima_idx[k + 1]]
+        first = strokes.index(filtered_strokes[0])
+        minima_idx_strokes = [int(i) for i in minima_idx[first:first + len(filtered_strokes) + 1]]
 
-        Ds = [stroke.D for stroke in filtered_strokes]
-
-        fractions = []
-        for a, b in zip(minima_idx_strokes[:-1], minima_idx_strokes[1:]):
-            frac, _ = path_fraction(t[a:b + 1], reconstructed_speed[a:b + 1])
-            fractions.append(frac)
-
-        approx.set_problem(
-            minima_idx=minima_idx_strokes,
-            Ds=Ds,
-            output_sigma=fractions,
-            lambda_min=1e-3,
-            lambda_max=None,
-            direction_distance=0.01,
-        )
+        # Geometry: one Bezier per window, arc length = D of the stroke (shared with the lognormal amplitude)
+        Ds = [float(stroke.D) for stroke in filtered_strokes]
+        approx.set_problem(minima_idx=minima_idx_strokes, Ds=Ds, lambda_min=1e-3, lambda_max=None,
+                        direction_distance=DIRECTION_DISTANCE)
         curve_parameters, bezier = approx.approximate(recording.curve)
 
-        # HL indexes
-        if len(filtered_strokes) != len(waypoints) - 1:
-            if not DEBUG:
-                return (file, "warning", f"Number of filtered strokes ({len(filtered_strokes)}) does not match number of waypoints ({len(waypoints) - 1}).")
-            fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(recording.t, recording.trajectory.speed, color="black",
-                linewidth=1.5, label="Recorded speed")
-            ax.plot(recording.t, reconstructed_speed, color="tab:blue",
-                linewidth=1.5, label="Reconstructed velocity")
+        # Each stroke must reach (approximately) the waypoint of its segment, in the device frame
+        if MAX_ENDPOINT_REL_ERROR is not None:
+            waypoints_xyz = waypoints_to_array(waypoints, SWAP_YZ_WAYPOINTS, WS_MIN, WS_MAX)
+            nominal_steps = np.diff(waypoints_xyz, axis=0)
+            rel_errors = [np.linalg.norm(p["delta_p"] - step) / np.linalg.norm(step)
+                        for p, step in zip(curve_parameters, nominal_steps)]
+            if max(rel_errors) > MAX_ENDPOINT_REL_ERROR:
+                return (file, "warning", f"Stroke end points far from their segments (relative errors {np.round(rel_errors, 2).tolist()}).")
 
-            filtered_indices = {
-                strokes.index(stroke) for stroke in filtered_strokes
-            }
-            for stroke_index, density in enumerate(stroke_densities):
-                filtered_out = stroke_index not in filtered_indices
-                color = "tab:red" if filtered_out else "tab:green"
-                label = (f"Stroke {stroke_index + 1} (filtered out)"
-                    if filtered_out else f"Stroke {stroke_index + 1}")
-                ax.plot(recording.t, density, color=color, linewidth=1.0,
-                    label=label)
-                ax.fill_between(recording.t, 0, density, color=color, alpha=0.18)
+        # Speed quality of the kept strokes; shape error of the Bezier chain at equal curvilinear abscissa
+        kept_speed = StrokeSequence(filtered_strokes).v_array(t)
+        hl_speed = HL(recording.trajectory.speed, kept_speed, len(filtered_strokes), n_segments)
 
-            ax.axhline(VEL_THRESHOLD, color="tab:orange", linestyle="--",
-                linewidth=1.5, label="Velocity filter")
-            ax.set_xlabel("Time (s)")
-            ax.set_ylabel("Velocity / stroke density (m/s)")
-            ax.set_title(f"Recorded and reconstructed velocity: {subject} {task} {file.name}")
-            ax.grid(True, alpha=0.3)
-            ax.legend()
-            fig.tight_layout()
-            plt.show()
-            print(f"Warning: Number of filtered strokes ({len(filtered_strokes)}) does not match number of waypoints ({len(waypoints) - 1}). for file {file}")
-            return (file, "warning", f"Number of filtered strokes ({len(filtered_strokes)}) does not match number of waypoints ({len(waypoints) - 1}).")
-            
-
-        hl_speed = HL(recording.trajectory.speed, reconstructed_speed, len(filtered_strokes), len(waypoints) - 1)
-        
         i0, i1 = minima_idx_strokes[0], minima_idx_strokes[-1]
-        curve_cropped = Curve(
-            x=recording.curve.x[i0:i1+1],
-            y=recording.curve.y[i0:i1+1],
-            z=recording.curve.z[i0:i1+1],
-        )
-
+        curve_cropped = Curve(x=recording.curve.x[i0:i1 + 1], y=recording.curve.y[i0:i1 + 1], z=recording.curve.z[i0:i1 + 1])
         mse_curve, max_err = curve_cropped.mse(bezier)
 
-        output_file = os.path.join(OUTPUT_ROOT, subject, task, "recording_" + str(recording_id) + ".csv")
+        output_file = os.path.join(OUTPUT_ROOT, subject, task, f"recording_{recording_id}.csv")
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
-
         with open(output_file, "w") as f:
             f.write(f"stroke_id,t0,mu,sigma,D,{','.join(GEOMETRY_OUTPUT_COLUMNS)}\n")
-
-            # check if a previous stroke does still have an effect on the first filtered stroke
-            #if strokes.index(filtered_strokes[0]) > 0:
-            #    prev_stroke = strokes[filtered_strokes.index(filtered_strokes[0]) - 1]
-            #    first_filtered_stroke = filtered_strokes[0]
-            #    previous_stroke_95_time = lognormal_time_at_fraction(prev_stroke, 0.95)
-            #    current_stroke_start_time = lognormal_time_at_fraction(first_filtered_stroke, 0.05)
-            #    print(f"Previous stroke 95% time: {previous_stroke_95_time}, Current stroke 5% time: {current_stroke_start_time} in file {file}")
-            for stroke in filtered_strokes:
-                f.write(f"{filtered_strokes.index(stroke)},{stroke.to},{stroke.mu},{stroke.sigma},{stroke.D}")
+            for k, (stroke, params) in enumerate(zip(filtered_strokes, curve_parameters)):
+                values = [str(k), str(stroke.to), str(stroke.mu), str(stroke.sigma), str(stroke.D)]
                 for key in GEOMETRY_OUTPUT_COLUMNS:
-                    value = curve_parameters[filtered_strokes.index(stroke)][key]
-                    if isinstance(value, np.ndarray) or isinstance(value, (list, tuple)):
-                        value_str = ';'.join(map(str, value))
-                    else:
-                        value_str = str(value)
-                    f.write(f",{value_str}")
-                f.write("\n")
+                    value = params[key]
+                    values.append(";".join(map(str, value)) if isinstance(value, (np.ndarray, list, tuple)) else str(value))
+                f.write(",".join(values) + "\n")
         return (file, "ok", {"hl_speed": hl_speed, "mse": mse_curve, "max_err": max_err})
     except Exception as e:
         if DEBUG:
@@ -397,7 +317,3 @@ if __name__ == '__main__':
 
         fig.tight_layout()
         plt.show()
-        
-
-
-            
