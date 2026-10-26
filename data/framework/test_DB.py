@@ -207,7 +207,7 @@ def process_file(file, direction_distances, write_output):
         for direction_distance in direction_distances:
             approx = BezierOptimization()
             approx.set_problem(minima_idx=minima_idx_strokes, Ds=Ds, lambda_min=LAMBDA_MIN, lambda_max=None,
-                               direction_distance=direction_distance)
+                               direction_distance=direction_distance, optimize_end_directions=True)
             try:
                 curve_parameters, bezier = approx.approximate(recording.curve)
             except Exception as e:
