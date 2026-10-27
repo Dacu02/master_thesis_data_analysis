@@ -10,16 +10,19 @@ participant "Loss" as L
 participant "Trainer" as T
 
 == Data preparation ==
-D -> D : Express each stroke in its own frame\n(origin = its start)
-D -> D : Pair with previous stroke,\nflag first strokes
-D -> D : Split by subject,\nstandardize with train statistics
+D -> D : Isolate each stroke
+D -> D : Pair strokes with previous stroke\nand next waypoint
+D -> D : Train and validation split
+D -> D : Standardization
 
 == Initialization ==
-T -> N : Initialize mixture from data statistics
+D -> N : Initialize MDN head\nwith precomputed\nmeans and covariances
 
 == Training ==
 loop each epoch
   loop each mini-batch
+    D -> D : Random rotation / reflection
+    D -> D : Gaussian noise
     D -> N : Waypoints, first-stroke flag,\ntrue previous stroke
     D -> L : True stroke parameters
     N -> L : Predicted mixture\n(weights, means, covariances)
@@ -30,10 +33,11 @@ loop each epoch
   end
 
   == Validation ==
-  T -> N : Forward held-out subjects
+  D -> N : Held-out strokes\n(clean inputs, no weight update)
+  D -> L : True stroke parameters
   N -> L : Predicted mixture
   L --> T : Validation NLL
-  T -> T : Save checkpoint if best,\nstop if no improvement
+  T -> T : Save checkpoint if best,\nstop after PATIENCE epochs\nwithout best
 end
 
 == Model selection ==

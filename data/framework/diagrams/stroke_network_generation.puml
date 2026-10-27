@@ -1,4 +1,5 @@
 @startuml stroke_network_generation
+title Stroke network - generation
 
 skinparam sequenceMessageAlign center
 skinparam responseMessageBelowArrow true
@@ -8,20 +9,26 @@ participant "Generator" as G
 participant "Network" as N #E6E0FA
 participant "Builder" as B
 
-U -> G : Waypoints + random seed
+U -> G : Task, seed
 
+== Autoregressive stroke sampling ==
 loop for each stroke (target = next waypoint)
-  G -> G : Express waypoints relative to\nthe current end point
-  G -> N : Conditioning + previous generated stroke\n(start-of-sequence input for the first)
-  N -> N : Pick a mixture component,\nsample a Gaussian
-  N --> G : Sampled stroke parameters
-  G -> G : Enforce valid ranges,\nadvance end point
+  G -> G : Express waypoints relative to the start
+  G -> N : Conditioning and previous\ngenerated stroke
+  alt deterministic
+    N -> N : Mean of the highest-weight component
+  else stochastic
+    N -> N : Pick a mixture component,\nsample its Gaussian
+  end
+  N --> G : Stroke parameters (standardized)
+  G -> G : De-standardize, check values, advance
 end
 
+== Trajectory construction ==
 G -> B : Stroke sequence
 B -> B : Amplitude of each stroke = Bézier arc length
 B -> B : Sum lognormal speed profiles over time
-B -> B : Speed minima between peaks = segment boundaries
-B -> B : Cumulative normalized speed = arc-length fraction\npoint along the Bézier segment
+B -> B : Travelled distance S(t) = sum_k D_k Phi_k(t)\n(Phi_k = lognormal CDF of stroke k)
+B -> B : S(t) => Bézier segment reached\nand point at that arc length
 B --> U : Trajectory + speed profile
 @enduml
