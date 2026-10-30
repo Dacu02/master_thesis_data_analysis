@@ -19,10 +19,10 @@ from scipy.integrate import cumulative_trapezoid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ------------------------------------------------------------------ Input files
-CSV_ROOT = os.path.join(os.getcwd()).split('src')[0] + "/recording_csv"
+CSV_ROOT = os.path.join(os.path.join(os.getcwd()).split('src')[0], "recording_csv")
 CSV_FILES = sorted(Path(CSV_ROOT).glob("**/*.csv"))
-YAML_PATHS_FILE = os.path.join(os.getcwd()).split('src')[0] + "/src/unisa_acg_ros2/haptics/haptic_interaction_teach_and_record_demo/config/paths.yaml"
-OUTPUT_ROOT = os.path.join(os.getcwd()).split('src')[0] + "/reconstructed_csv"
+YAML_PATHS_FILE = os.path.join(os.path.join(os.getcwd()).split('src')[0], "src/unisa_acg_ros2/haptics/haptic_interaction_teach_and_record_demo/config/paths.yaml")
+OUTPUT_ROOT = os.path.join(os.path.join(os.getcwd()).split('src')[0], "reconstructed_csv")
 DEBUG = False
 POSITION_COLUMNS = ["position_x", "position_y", "position_z"]
 VELOCITY_COLUMNS = ["twist_linear_x", "twist_linear_y", "twist_linear_z"]
@@ -244,8 +244,7 @@ def process_file(file):
 
         # Geometry: one Bezier per window, arc length = D of the stroke (shared with the lognormal amplitude)
         Ds = [float(stroke.D) for stroke in filtered_strokes]
-        approx.set_problem(minima_idx=minima_idx_strokes, Ds=Ds, lambda_min=1e-3, lambda_max=None,
-                        direction_distance=DIRECTION_DISTANCE)
+        approx.set_problem(minima_idx=minima_idx_strokes, Ds=Ds, lambda_min=1e-3, lambda_max=None)
         curve_parameters, bezier = approx.approximate(recording.curve)
 
         # Each stroke must reach (approximately) the waypoint of its segment, in the device frame

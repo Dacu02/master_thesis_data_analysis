@@ -17,26 +17,9 @@ def _check_sigma(sigma):
         raise ValueError("sigma must be greater than zero.")
 
 
-def lognormal_speed(t, D, t0, mu, sigma):
-    """
-    Speed profile of a single lognormal stroke.
-
-    D: stroke amplitude, t0: onset, mu/sigma: lognormal location/scale.
-    """
-    _check_sigma(sigma)
-    t = np.asarray(t, dtype=float)
-    tau = t - t0
-    out = np.zeros_like(t)
-    pos = tau > 0.0
-    out[pos] = (
-        D / (sigma * SQRT_2PI * tau[pos])
-        * np.exp(-((np.log(tau[pos]) - mu) ** 2) / (2.0 * sigma**2))
-    )
-    return out
-
 def _sum_lognormals(t, theta):
     """Sum the speed profiles of all strokes in theta (rows: [D, t0, mu, sigma])."""
-    return sum(lognormal_speed(t, *row) for row in theta)
+    return sum(Stroke.lognormal_speed(t, *row) for row in theta)
 
 
 def initial_guesses(t, target, window, t0_min,
@@ -231,7 +214,7 @@ class LeastSquares(Extract):
             return np.asarray(x, dtype=float) if D_fixed is None else np.array([D_fixed, *x])
 
         def residuals(x):
-            return lognormal_speed(t[window], *to_theta(x)) - target[window]
+            return Stroke.lognormal_speed(t[window], *to_theta(x)) - target[window]
 
         lo, hi = lower[free], upper[free]
         best = None
@@ -273,7 +256,7 @@ class LeastSquares(Extract):
             theta, info = self._fit_stroke(
                 t, residual, window, D_fixed=float(D[k]) if self.lock_D else None
             )
-            fitted = lognormal_speed(t, *theta)
+            fitted = Stroke.lognormal_speed(t, *theta)
             residual_after = residual - fitted
 
             steps.append({
@@ -366,7 +349,7 @@ class LeastSquares(Extract):
         theta = unpack(solution.x)
         refined = [
             {"k": k, "window": step["window"], "theta": theta[k],
-             "fitted": lognormal_speed(t, *theta[k])}
+             "fitted": Stroke.lognormal_speed(t, *theta[k])}
             for k, step in enumerate(steps)
         ]
         residual = speed - sum(item["fitted"] for item in refined)

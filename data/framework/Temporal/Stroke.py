@@ -2,7 +2,7 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 from sympy import erfinv
-
+SQRT_2PI = np.sqrt(2.0 * np.pi)
 
 class Stroke:
     """
@@ -139,3 +139,22 @@ class Stroke:
             float(self.mu)
             + float(self.sigma) * np.sqrt(2.0) * erfinv(2.0 * fraction - 1.0)
         )
+
+    @staticmethod
+    def lognormal_speed(t, D, t0, mu, sigma):
+        """
+        Speed profile of a single lognormal stroke.
+
+        D: stroke amplitude, t0: onset, mu/sigma: lognormal location/scale.
+        """
+        if D <= 0 or sigma <= 0:
+            raise ValueError("D and sigma must be greater than zero, found D={}, sigma={}".format(D, sigma))
+        t = np.asarray(t, dtype=float)
+        tau = t - t0
+        out = np.zeros_like(t)
+        pos = tau > 0.0
+        out[pos] = (
+            D / (sigma * SQRT_2PI * tau[pos])
+            * np.exp(-((np.log(tau[pos]) - mu) ** 2) / (2.0 * sigma**2))
+        )
+        return out

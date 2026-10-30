@@ -13,7 +13,7 @@ curve_fitting -> curve_fitting: Set Bezier parameters\n(P0, P3, D, directions)
 curve_fitting -> LSQ: Fit curve without constraints
 LSQ --> LSQ: Bezier curve minimizing\nMSE against recording
 LSQ --> curve_fitting: Starting lambdas solution
-curve_fitting -> SLSQP: Fit curve with D lenght constraint
+curve_fitting -> SLSQP: Fit curve with D lenght constraint\nstarting from previous solution
 SLSQP --> SLSQP: Bezier curve minimizing\nMSE against recording
 SLSQP --> curve_fitting: Lambdas solution
 curve_fitting --> pipeline: Fitted curve parameters
