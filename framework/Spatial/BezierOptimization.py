@@ -46,6 +46,17 @@ class BezierOptimization(Approximate):
   # Relative step of the forward differences used for gradients and Jacobians.
   _FD_STEP = np.sqrt(np.finfo(float).eps)
 
+  # Half-width of a zoomed view of a node, as a multiple of the distance between the node and
+  # the farthest sample used by its finite differences.
+  _ZOOM_FACTOR = 3.0
+
+  # Smallest extent of an axis of a 3D view, as a fraction of its largest extent: an axis along
+  # which the content does not vary is flattened down to this thickness.
+  _MIN_AXIS_FRACTION = 0.15
+
+  # Margin around the content of a 3D view, as a fraction of its largest extent.
+  _VIEW_MARGIN = 0.08
+
   def __init__(self):
     super().__init__()
 
@@ -127,47 +138,55 @@ class BezierOptimization(Approximate):
     return np.cos(angle) * direction + np.sin(angle) * (a * e1 + b * e2) / angle
 
   @staticmethod
-  def _one_sided_velocity(points: np.ndarray, t: np.ndarray, k: int, indices: range) -> np.ndarray | None:
+  def _first_distinct_sample(points: np.ndarray, k: int, indices: range) -> int | None:
     """
-    Difference quotient (points[j] - points[k]) / (t[j] - t[k]), with j the first sample of
-    `indices` that does not coincide with points[k], so that repeated samples (a still pen) are
-    skipped. The same expression is a forward difference when `indices` follows k and a backward
-    difference when it precedes k. Returns None if every sample of `indices` coincides with points[k].
+    First sample of `indices` that does not coincide with points[k], so that repeated samples
+    (a still pen) are skipped. Returns None if every sample of `indices` coincides with points[k].
     """
     for j in indices:
       if np.any(points[j] != points[k]):
-        return (points[j] - points[k]) / (t[j] - t[k])
+        return j
     return None
 
   @classmethod
-  def _finite_difference_directions(cls, points: np.ndarray, t: np.ndarray, idx: list[int]) -> list[np.ndarray]:
+  def _finite_difference_directions(cls, points: np.ndarray, t: np.ndarray,
+                                    idx: list[int]) -> tuple[list[np.ndarray], list[tuple]]:
     """
     Unit tangent directions at the samples idx: forward difference at the start of the chain,
     backward difference at its end, mean of the backward and forward differences at every interior
-    junction. Each difference only uses samples of the segment adjacent to the node on that side.
-    The returned vectors point along the direction of travel.
+    junction. Each difference (points[j] - points[k]) / (t[j] - t[k]) goes from the node k to the
+    nearest sample j of the adjacent segment that does not coincide with it. The returned vectors
+    point along the direction of travel.
+
+    Returns the directions and, for every node, the pair (backward sample, forward sample) used by
+    its differences, with None on the side that is not used.
     """
     lo, hi = idx[0], idx[-1]
     if np.any(np.diff(t[lo:hi + 1]) <= 0):
       raise ValueError("The time stamps between minima_idx[0] and minima_idx[-1] must be strictly increasing.")
 
-    velocities = [cls._one_sided_velocity(points, t, idx[0], range(idx[0] + 1, idx[1] + 1))]
-    for m in range(1, len(idx) - 1):
-      k = idx[m]
-      backward = cls._one_sided_velocity(points, t, k, range(k - 1, idx[m - 1] - 1, -1))
-      forward = cls._one_sided_velocity(points, t, k, range(k + 1, idx[m + 1] + 1))
-      velocities.append(None if backward is None or forward is None else 0.5 * (backward + forward))
-    velocities.append(cls._one_sided_velocity(points, t, idx[-1], range(idx[-1] - 1, idx[-2] - 1, -1)))
+    last = len(idx) - 1
+    directions, stencils = [], []
+    for m, k in enumerate(idx):
+      backward = cls._first_distinct_sample(points, k, range(k - 1, idx[m - 1] - 1, -1)) if m > 0 else None
+      forward = cls._first_distinct_sample(points, k, range(k + 1, idx[m + 1] + 1)) if m < last else None
+      if (m > 0 and backward is None) or (m < last and forward is None):
+        raise ValueError(
+          f"Cannot estimate the tangent direction at sample {k}: an adjacent segment has no sample "
+          f"distinct from it.")
 
-    directions = []
-    for k, velocity in zip(idx, velocities):
-      speed = 0.0 if velocity is None else np.linalg.norm(velocity)
+      # Mean of the available difference quotients: one at the ends of the chain, two at a junction
+      quotients = [(points[j] - points[k]) / (t[j] - t[k]) for j in (backward, forward) if j is not None]
+      velocity = np.mean(quotients, axis=0)
+      speed = np.linalg.norm(velocity)
       if not speed > 0:
         raise ValueError(
           f"Cannot estimate the tangent direction at sample {k}: the finite-difference velocity "
           f"vanishes there (the backward and forward differences cancel out).")
+
       directions.append(velocity / speed)
-    return directions
+      stencils.append((backward, forward))
+    return directions, stencils
 
   # ------------------------------------------------------------------ #
   # Helpers
@@ -411,11 +430,132 @@ class BezierOptimization(Approximate):
                    float(segment_mse(i, v) * segment.length ** 2)))
     return fits
 
-  def _plot_comparison(self, segments, directions, warm_start, fits):
-    """3D plot of the data, of the chain given by the warm start and of the fitted chain."""
+  # ------------------------------------------------------------------ #
+  # Plotting
+  # ------------------------------------------------------------------ #
+  @staticmethod
+  def _arrow(axes, origin, vector, **kwargs):
+    """3D arrow from `origin` to `origin + vector`."""
+    return axes.quiver(*origin[:, None], *vector[:, None], **kwargs)
+
+  @classmethod
+  def _fit_box(cls, axes, content, labels, n_ticks, size=7):
+    """
+    Axis limits tight around `content` ((N, 3) points that must stay visible), with the same scale
+    on the three axes: the box is flattened along the axes on which the content varies least, so
+    that it takes less space without distorting lengths and angles. Each axis gets a number of
+    ticks proportional to its extent, with small tick and axis labels.
+    """
+    from matplotlib.ticker import MaxNLocator
+
+    low, high = content.min(axis=0), content.max(axis=0)
+    largest = np.max(high - low)
+    extent = np.maximum(high - low, cls._MIN_AXIS_FRACTION * largest) + 2 * cls._VIEW_MARGIN * largest
+    center = 0.5 * (low + high)
+    fraction = extent / np.max(extent)
+
+    setters = (axes.set_xlim, axes.set_ylim, axes.set_zlim)
+    for axis, set_limits, c, e, f, label in zip(
+        (axes.xaxis, axes.yaxis, axes.zaxis), setters, center, extent, fraction, labels):
+      set_limits(c - 0.5 * e, c + 0.5 * e)
+      axis.set_major_locator(MaxNLocator(max(1, int(round(n_ticks * f)))))
+      axis.set_label_text(label, fontsize=size + 1)
+      axis.labelpad = 0
+    axes.tick_params(labelsize=size, pad=0)
+    axes.set_box_aspect(tuple(fraction))
+
+  @staticmethod
+  def _window_samples(points, k, lo, hi, half_width):
+    """
+    First and last index of the contiguous run of samples around k, within [lo, hi], that lie
+    inside the cube of the given half-width centered at points[k].
+    """
+    def inside(j):
+      return np.max(np.abs(points[j] - points[k])) <= half_width
+
+    first, last = k, k
+    while first > lo and inside(first - 1):
+      first -= 1
+    while last < hi and inside(last + 1):
+      last += 1
+    return first, last
+
+  @staticmethod
+  def _figure_legend(figure):
+    """One legend for the whole figure, with one entry per label."""
+    handles = {}
+    for axes in figure.axes:
+      for handle, label in zip(*axes.get_legend_handles_labels()):
+        handles.setdefault(label, handle)
+    figure.legend(list(handles.values()), list(handles.keys()), loc="lower center", ncol=len(handles))
+
+  def _plot_tangent_estimation(self, points, idx, directions, stencils):
+    """
+    One zoomed 3D view per node of the chain, with the samples around the node, the finite
+    differences used at the node and the resulting unit tangent (observed direction). At a junction
+    the backward and forward differences are both drawn, together with the single unit tangent
+    given by their mean.
+    """
     import matplotlib.pyplot as plt
 
-    figure = plt.figure()
+    n_nodes = len(idx)
+    n_cols = min(n_nodes, 4)
+    n_rows = int(np.ceil(n_nodes / n_cols))
+    figure = plt.figure(figsize=(4 * n_cols, 3 * n_rows + 1))
+    figure.suptitle("Tangent estimation")
+
+    for m, (k, direction, (backward, forward)) in enumerate(zip(idx, directions, stencils)):
+      axes = figure.add_subplot(n_rows, n_cols, m + 1, projection="3d")
+
+      # The window is sized on the farthest sample used by the differences
+      reach = max(np.linalg.norm(points[j] - points[k]) for j in (backward, forward) if j is not None)
+      half_width = self._ZOOM_FACTOR * reach
+      first, last = self._window_samples(
+        points, k, idx[max(m - 1, 0)], idx[min(m + 1, n_nodes - 1)], half_width)
+
+      # Coordinates relative to the node, in a power-of-ten unit of the window size, so that the
+      # tick labels stay short and carry no offset
+      unit = 10.0 ** np.floor(np.log10(half_width))
+      relative = (points - points[k]) / unit
+      origin = np.zeros(3)
+      window = relative[first:last + 1]
+      tangent = 0.8 * half_width / unit * direction
+
+      axes.plot(*window.T, "-", color="0.7", linewidth=0.8)
+      axes.plot(*window.T, "k.", markersize=4, label="samples")
+      axes.plot(*origin[:, None], "o", color="tab:red", markersize=6, label="node")
+
+      # The unit tangent is dashed and the differences are thicker, so that the differences stay
+      # visible where they overlap with it
+      self._arrow(axes, origin, tangent, color="tab:green", linewidth=1.5,
+                  linestyle="--", arrow_length_ratio=0.15, label="observed direction")
+
+      # Displacements behind the difference quotients, both drawn along the direction of travel
+      if backward is not None:
+        self._arrow(axes, relative[backward], -relative[backward], color="tab:blue", linewidth=3,
+                    arrow_length_ratio=0.3, label="backward difference")
+      if forward is not None:
+        self._arrow(axes, origin, relative[forward], color="tab:orange", linewidth=3,
+                    arrow_length_ratio=0.3, label="forward difference")
+
+      kind = "start" if m == 0 else "end" if m == n_nodes - 1 else "junction"
+      axes.set_title(f"{kind} (sample {k})", fontsize=10)
+      self._fit_box(axes, np.vstack([window, tangent]),
+                    tuple(f"Δ{name} [{unit:.0e}]" for name in "xyz"), n_ticks=3)
+
+    self._figure_legend(figure)
+    figure.tight_layout(rect=(0.0, 0.06, 1.0, 0.95))
+    plt.show()
+
+  def _plot_optimization_result(self, segments, directions, warm_start, fits):
+    """
+    3D view of the whole chain: the data, the chain given by the affine solver with the observed
+    directions and the fitted chain, with the observed and the optimized unit tangent at every node,
+    labelled with the angle between them.
+    """
+    import matplotlib.pyplot as plt
+
+    figure = plt.figure(figsize=(8, 6))
     axes = figure.add_subplot(111, projection="3d")
     for i, (segment, fit) in enumerate(zip(segments, fits)):
       lambda_s0, lambda_e0 = warm_start[2 * i:2 * i + 2] * segment.length
@@ -435,11 +575,24 @@ class BezierOptimization(Approximate):
       axes.plot(*first_solution.T, "b--", label=labels[1])
       axes.plot(*second_solution.T, "r-", label=labels[2])
 
-    axes.set_xlabel("x")
-    axes.set_ylabel("y")
-    axes.set_zlabel("z")
-    axes.set_title("Bezier solver comparison")
-    axes.legend()
+    data = np.concatenate([segment.points for segment in segments])
+    length = 0.1 * np.max(data.max(axis=0) - data.min(axis=0))
+
+    # One unit tangent per node; at a junction it is shared by the two adjacent segments
+    nodes = [segment.p0 for segment in segments] + [segments[-1].p3]
+    optimized = [fit[2] for fit in fits] + [fits[-1][3]]
+    tips = []
+    for m, (node, observed, fitted) in enumerate(zip(nodes, directions, optimized)):
+      labels = ("observed direction", "optimized direction") if m == 0 else (None, None)
+      self._arrow(axes, node, length * observed, color="tab:green", arrow_length_ratio=0.2, label=labels[0])
+      self._arrow(axes, node, length * fitted, color="tab:purple", arrow_length_ratio=0.2, label=labels[1])
+      angle = np.degrees(np.arccos(np.clip(observed @ fitted, -1.0, 1.0)))
+      axes.text(*(node + 1.15 * length * fitted), f"{angle:.1f}°", fontsize=8)
+      tips += [node + length * observed, node + length * fitted]
+
+    axes.set_title("Optimization result")
+    axes.legend(fontsize=8)
+    self._fit_box(axes, np.vstack([data, tips]), ("x", "y", "z"), n_ticks=5)
     figure.tight_layout()
     plt.show()
 
@@ -478,9 +631,12 @@ class BezierOptimization(Approximate):
         fitted Bezier at arc-length fraction output_sigma[i][k]. If None, each sample keeps the
         position it has in the fit. Default is None.
     plot_comparison : bool, optional
-        If True, display a 3D comparison of the chain obtained with the affine solver (initial
-        directions, Bezier parameter equal to the data abscissa) and of the fitted chain.
-        Default is False.
+        If True, two figures are displayed. Before the optimization: one zoomed view per node with
+        the samples around it, the backward and/or forward differences and the resulting unit
+        tangent (observed direction; a single one at each junction). After the optimization: the
+        data, the chain obtained with the affine solver (observed directions, Bezier parameter
+        equal to the data abscissa) and the fitted chain, with the observed and the optimized unit
+        tangent at every node and the angle between them. Default is False.
     skip_discrete_step : bool, optional
         If True, the length-constrained affine step is skipped and the warm start of the
         arc-length step is the bounds-only least-squares solution. Default is False.
@@ -560,7 +716,9 @@ class BezierOptimization(Approximate):
 
     # Initial tangent directions at the two ends of the chain and at every interior junction;
     # each interior direction is shared by the two segments that meet there (G1 continuity)
-    directions = self._finite_difference_directions(curve_points, t, idx)
+    directions, stencils = self._finite_difference_directions(curve_points, t, idx)
+    if self.plot_comparison:
+      self._plot_tangent_estimation(curve_points, idx, directions, stencils)
 
     warm_start = np.concatenate([
       self._affine_warm_start(i, segment, directions[i], directions[i + 1])
@@ -569,7 +727,7 @@ class BezierOptimization(Approximate):
     fits = self._fit_chain(segments, directions, warm_start)
 
     if self.plot_comparison:
-      self._plot_comparison(segments, directions, warm_start, fits)
+      self._plot_optimization_result(segments, directions, warm_start, fits)
 
     spline_parameters = []
     full_approximation_points = []
