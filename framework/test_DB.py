@@ -16,10 +16,10 @@ from scipy.signal import find_peaks
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ------------------------------------------------------------------ Input files
-CSV_ROOT = os.path.join(os.getcwd()).split('src')[0] + "/recording_csv"
+CSV_ROOT = os.path.join(os.path.join(os.getcwd()).split('src')[0], "recording_csv")
 CSV_FILES = sorted(Path(CSV_ROOT).glob("**/*.csv"))
-YAML_PATHS_FILE = os.path.join(os.getcwd()).split('src')[0] + "/src/unisa_acg_ros2/haptics/haptic_interaction_teach_and_record_demo/config/paths.yaml"
-OUTPUT_ROOT = os.path.join(os.getcwd()).split('src')[0] + "/reconstructed_csv"
+YAML_PATHS_FILE = os.path.join(os.path.join(os.getcwd()).split('src')[0] , "src/unisa_acg_ros2/haptics/haptic_interaction_teach_and_record_demo/config/paths.yaml")
+OUTPUT_ROOT = os.path.join(os.path.join(os.getcwd()).split('src')[0] , "reconstructed_csv")
 DEBUG = False
 GEOMETRY_OUTPUT_COLUMNS = ['lambda_s', 'u_s', 'lambda_e', 'u_e', 'delta_p']
 
@@ -46,8 +46,8 @@ VEL_THRESHOLD = 0.2 #m/s
 # ---------------------------------------------------------------- Bezier geometry
 LAMBDA_MIN = 1e-3                                          # m: lower bound of the tangent lengths
 SWEEP = True                                               # True: compare DIRECTION_DISTANCES without writing the dataset
-DIRECTION_DISTANCES = [k * 1e-3 for k in range(1, 11)]     # m: radii tried for the tangent neighbourhood (SWEEP = True)
-DIRECTION_DISTANCE = 2.5e-3                                # m: radius used to write the dataset (SWEEP = False)
+DIRECTION_DISTANCES = [k * 1e-4 for k in range(1, 101)]     # m: radii tried for the tangent neighbourhood (SWEEP = True)
+DIRECTION_DISTANCE = 1.5e-3                                # m: radius used to write the dataset (SWEEP = False)
 MAX_ENDPOINT_REL_ERROR = None  # e.g. 0.5: maximum ||delta_p - nominal step|| / ||nominal step||; None disables the check
 
 
@@ -207,7 +207,7 @@ def process_file(file, direction_distances, write_output):
         for direction_distance in direction_distances:
             approx = BezierOptimization()
             approx.set_problem(minima_idx=minima_idx_strokes, Ds=Ds, lambda_min=LAMBDA_MIN, lambda_max=None,
-                               direction_distance=direction_distance, optimize_end_directions=True)
+                               direction_distance=[direction_distance, DIRECTION_DISTANCE], optimize_end_directions=True)
             try:
                 curve_parameters, bezier = approx.approximate(recording.curve)
             except Exception as e:
